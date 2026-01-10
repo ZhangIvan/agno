@@ -243,10 +243,10 @@ class BasePDFReader(Reader):
                 return True
             else:
                 log_error(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
-                return False
+                raise ValueError(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
         except Exception as e:
             log_error(f'Error decrypting PDF file "{doc_name}": {e}')
-            return False
+            raise ValueError(f'Error decrypting PDF file "{doc_name}": {e}')
 
     def _create_documents(self, pdf_content: List[str], doc_name: str, use_uuid_for_id: bool, page_number_shift):
         if self.split_on_pages:
