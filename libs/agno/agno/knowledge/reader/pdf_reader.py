@@ -245,10 +245,10 @@ class BasePDFReader(Reader):
                 return True
             else:
                 log_error(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
-                return False
+                raise ValueError(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
         except Exception as e:
             log_error(f'Error decrypting PDF file "{doc_name}": {e}')
-            return False
+            raise ValueError(f'Error decrypting PDF file "{doc_name}": {e}')
 
     def _create_documents(self, pdf_content: List[str], doc_name: str, use_uuid_for_id: bool, page_number_shift):
         if self.split_on_pages:
@@ -347,7 +347,8 @@ class PDFReader(BasePDFReader):
     ) -> List[Document]:
         if pdf is None:
             log_error("No pdf provided")
-            return []
+            raise ValueError("No pdf provided")
+
         doc_name = self._get_doc_name(pdf, name)
         log_debug(f"Reading: {doc_name}")
 
@@ -355,10 +356,11 @@ class PDFReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
+
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk
         return self._pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True)
@@ -371,7 +373,8 @@ class PDFReader(BasePDFReader):
     ) -> List[Document]:
         if pdf is None:
             log_error("No pdf provided")
-            return []
+            raise ValueError("No pdf provided")
+
         doc_name = self._get_doc_name(pdf, name)
         log_debug(f"Reading: {doc_name}")
 
@@ -379,11 +382,11 @@ class PDFReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
 
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk.
         return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True)
@@ -404,11 +407,11 @@ class PDFImageReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
 
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk.
         return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True)
@@ -426,11 +429,11 @@ class PDFImageReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
 
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk.
         return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True)

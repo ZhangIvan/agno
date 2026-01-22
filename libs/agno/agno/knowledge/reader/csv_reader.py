@@ -209,11 +209,11 @@ class CSVReader(Reader):
         except UnicodeDecodeError as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Encoding error reading {file_desc}: {e}. Try specifying a different encoding.")
-            return []
+            raise ValueError(f"Encoding error reading {file_desc}: {e}")
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")
 
     async def async_read(
         self,
@@ -315,11 +315,11 @@ class CSVReader(Reader):
         except UnicodeDecodeError as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Encoding error reading {file_desc}: {e}. Try specifying a different encoding.")
-            return []
+            raise ValueError(f"Encoding error reading {file_desc}: {e}")
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")
 
     def _read_xlsx(self, file: Union[Path, IO[Any]], *, workbook_name: str) -> List[Document]:
         try:
