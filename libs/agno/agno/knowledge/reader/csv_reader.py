@@ -76,9 +76,18 @@ class CSVReader(Reader):
                     chunked_documents.extend(self.chunk_document(document))
                 return chunked_documents
             return documents
+        except FileNotFoundError:
+            raise
+        except ImportError:
+            raise
+        except UnicodeDecodeError as e:
+            file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
+            log_error(f"Encoding error reading {file_desc}: {e}. Try specifying a different encoding.")
+            raise ValueError(f"Encoding error reading {file_desc}: {e}")
         except Exception as e:
-            log_error(f"Error reading: {getattr(file, 'name', str(file)) if isinstance(file, IO) else file}: {e}")
-            return []
+            file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
+            log_error(f"Error reading {file_desc}: {e}")
+            raise ValueError(f"Error reading {file_desc}: {e}")
 
     async def async_read(
         self,
@@ -154,6 +163,16 @@ class CSVReader(Reader):
                 documents = await self.chunk_documents_async(documents)
 
             return documents
+        except FileNotFoundError:
+            raise
+        except ImportError:
+            raise
+        except UnicodeDecodeError as e:
+            file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
+            log_error(f"Encoding error reading {file_desc}: {e}. Try specifying a different encoding.")
+            raise ValueError(f"Encoding error reading {file_desc}: {e}")
         except Exception as e:
-            log_error(f"Error reading async: {getattr(file, 'name', str(file)) if isinstance(file, IO) else file}: {e}")
-            return []
+            file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
+            log_error(f"Error reading {file_desc}: {e}")
+            raise ValueError(f"Error reading {file_desc}: {e}")
+

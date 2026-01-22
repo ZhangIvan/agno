@@ -45,8 +45,8 @@ class WikipediaReader(Reader):
             summary = wikipedia.summary(topic, auto_suggest=self.auto_suggest)
 
         except wikipedia.exceptions.PageError:
-            summary = None
             log_info("Wikipedia Error: Page not found.")
+            raise ValueError(f"Reading Wikipedia topic: {topic} Error: Page not found.")
 
         # Only create Document if we successfully got a summary
         if summary:
@@ -76,8 +76,7 @@ class WikipediaReader(Reader):
             summary = await asyncio.to_thread(wikipedia.summary, topic, auto_suggest=self.auto_suggest)
 
         except wikipedia.exceptions.PageError:
-            summary = None
-            log_info("Wikipedia Error: Page not found.")
+            raise ValueError(f"Reading Wikipedia topic: {topic} Error: Page not found.")
 
         # Only create Document if we successfully got a summary
         if summary:

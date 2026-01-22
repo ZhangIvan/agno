@@ -69,7 +69,7 @@ class DocxReader(Reader):
 
         except Exception as e:
             log_error(f"Error reading file: {e}")
-            return []
+            raise ValueError(f"Error reading file: {e}")
 
     async def async_read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         """Asynchronously read a docx file and return a list of documents"""
@@ -77,4 +77,4 @@ class DocxReader(Reader):
             return await asyncio.to_thread(self.read, file, name)
         except Exception as e:
             log_error(f"Error reading file asynchronously: {e}")
-            return []
+            raise ValueError(f"Error reading file asynchronously: {e}")

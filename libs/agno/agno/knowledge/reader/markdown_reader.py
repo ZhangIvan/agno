@@ -83,7 +83,7 @@ class MarkdownReader(Reader):
             return documents
         except Exception as e:
             log_error(f"Error reading: {file}: {e}")
-            return []
+            raise ValueError(f"Error reading: {file}: {e}")
 
     async def async_read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         try:
@@ -119,7 +119,7 @@ class MarkdownReader(Reader):
             return [document]
         except Exception as e:
             log_error(f"Error reading asynchronously: {file}: {e}")
-            return []
+            raise ValueError(f"Error reading asynchronously: {file}: {e}")
 
     async def _async_chunk_document(self, document: Document) -> List[Document]:
         if not self.chunk or not document:
