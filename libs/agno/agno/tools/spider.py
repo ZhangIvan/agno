@@ -16,6 +16,7 @@ class SpiderTools(Toolkit):
     Spider is a toolkit for web searching, scraping, and crawling.
 
     Args:
+        api_key (Optional[str]): API Key.
         enable_search (bool): Enable web search functionality. Default is True.
         enable_scrape (bool): Enable web scraping functionality. Default is True.
         enable_crawl (bool): Enable web crawling functionality. Default is True.
@@ -27,6 +28,7 @@ class SpiderTools(Toolkit):
 
     def __init__(
         self,
+        api_key: Optional[str] = None,
         max_results: Optional[int] = None,
         url: Optional[str] = None,
         optional_params: Optional[dict] = None,
@@ -36,6 +38,9 @@ class SpiderTools(Toolkit):
         all: bool = False,
         **kwargs,
     ):
+        self.api_key = api_key or os.getenv("SPIDER_API_KEY")
+        if self.api_key is None:
+            raise ValueError("No API key provided")
         self.max_results = max_results
         self.url = url
         self.optional_params = optional_params or {}
