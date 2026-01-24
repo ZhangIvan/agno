@@ -73,8 +73,7 @@ class S3Reader(Reader):
 
         except Exception as e:
             log_error(f"Error reading: {s3_object.uri}: {e}")
-
-        return []
+            raise ValueError(f"Error reading: {s3_object.uri}: {e}")
 
     async def async_read(self, name: Optional[str], s3_object: S3Object) -> List[Document]:
         """Asynchronously read S3 files by running the synchronous read operation in a thread."""

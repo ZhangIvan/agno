@@ -122,6 +122,8 @@ class DocumentChunking(ChunkingStrategy):
             chunks.append(
                 Document(id=chunk_id, name=document.name, meta_data=meta_data, content="\n\n".join(current_chunk))
             )
+            # increment chunk_number for consistency
+            chunk_number += 1
 
         # Handle overlap if specified
         if self.overlap > 0:
