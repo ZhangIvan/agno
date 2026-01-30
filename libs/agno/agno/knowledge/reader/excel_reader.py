@@ -187,7 +187,7 @@ class ExcelReader(Reader):
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")
 
     async def async_read(
         self,
@@ -222,4 +222,4 @@ class ExcelReader(Reader):
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")

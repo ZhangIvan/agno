@@ -245,10 +245,10 @@ class BasePDFReader(Reader):
                 return True
             else:
                 log_error(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
-                return False
+                raise ValueError(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
         except Exception as e:
             log_error(f'Error decrypting PDF file "{doc_name}": {e}')
-            return False
+            raise ValueError(f'Error decrypting PDF file "{doc_name}": {e}')
 
     def _create_documents(self, pdf_content: List[str], doc_name: str, use_uuid_for_id: bool, page_number_shift):
         if self.split_on_pages:
@@ -287,9 +287,28 @@ class BasePDFReader(Reader):
         pdf_content = []
         pdf_images_text = []
         for page in doc_reader.pages:
-            pdf_content.append(page.extract_text())
+            page_text = ""
+            try:
+                page_text = page.extract_text()
+            except KeyError as e:
+                if "'bbox'" in str(e):
+                    log_error(f"Font descriptor missing 'bbox' on page: {e}")
+                    page_text = ""
+                else:
+                    raise
+            except Exception as e:
+                log_error(f"Error extracting text from page: {e}")
+                page_text = ""
+            if page_text:
+                pdf_content.append(page_text)
             if read_images:
-                pdf_images_text.append(_ocr_reader(page))
+                try:
+                    image_text = _ocr_reader(page)
+                except Exception as e:
+                    log_error(f"Error processing images on page: {e}")
+                    image_text = ""
+                if image_text:
+                    pdf_images_text.append(image_text)
 
         pdf_content, shift = _clean_page_numbers(
             page_content_list=pdf_content,
@@ -308,10 +327,30 @@ class BasePDFReader(Reader):
     ):
         async def _read_pdf_page(page, read_images) -> Tuple[str, str]:
             # We tried "asyncio.to_thread(page.extract_text)", but it maintains state internally, which leads to issues.
-            page_text = page.extract_text()
+            page_text = ""
+            try:
+                page_text = page.extract_text()
+            except KeyError as e:
+                if "'bbox'" in str(e):
+                    log_error(f"Font descriptor missing 'bbox' on page processing: {e}")
+                    # 尝试使用更宽松的文本提取参数
+                    try:
+                        # 有些版本的pypdf支持不同的参数
+                        page_text = page.extract_text(kwargs={'space_width': 1.0})
+                    except:
+                        page_text = ""
+                else:
+                    raise
+            except Exception as e:
+                log_error(f"Error extracting text from page: {e}")
+                page_text = ""
 
             if read_images:
-                pdf_images_text = await _async_ocr_reader(page)
+                try:
+                    pdf_images_text = await _async_ocr_reader(page)
+                except Exception as e:
+                    log_error(f"Error processing images on page: {e}")
+                    pdf_images_text = ""
             else:
                 pdf_images_text = ""
 
@@ -347,7 +386,8 @@ class PDFReader(BasePDFReader):
     ) -> List[Document]:
         if pdf is None:
             log_error("No pdf provided")
-            return []
+            raise ValueError("No pdf provided")
+
         doc_name = self._get_doc_name(pdf, name)
         log_debug(f"Reading: {doc_name}")
 
@@ -355,10 +395,11 @@ class PDFReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
+
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk
         return self._pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True)
@@ -371,7 +412,8 @@ class PDFReader(BasePDFReader):
     ) -> List[Document]:
         if pdf is None:
             log_error("No pdf provided")
-            return []
+            raise ValueError("No pdf provided")
+
         doc_name = self._get_doc_name(pdf, name)
         log_debug(f"Reading: {doc_name}")
 
@@ -379,11 +421,11 @@ class PDFReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
 
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk.
         return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True)
@@ -404,11 +446,11 @@ class PDFImageReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
 
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk.
         return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True)
@@ -426,11 +468,11 @@ class PDFImageReader(BasePDFReader):
             pdf_reader = DocumentReader(pdf)
         except PdfStreamError as e:
             log_error(f"Error reading PDF: {e}")
-            return []
+            raise ValueError(f"Error reading PDF: {e}")
 
         # Handle PDF decryption
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
-            return []
+            raise ValueError("Failed to decrypt PDF")
 
         # Read and chunk.
         return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True)

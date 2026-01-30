@@ -145,7 +145,8 @@ class TavilyReader(Reader):
 
         except Exception as e:
             logger.error(f"Error extracting content from {url}: {e}")
-            return [Document(name=name or url, id=url, content="")]
+            # return [Document(name=name or url, id=url, content="")]
+            raise ValueError(f"Error extracting content from {url}: {e}")
 
     async def _async_extract(self, url: str, name: Optional[str] = None) -> List[Document]:
         """
