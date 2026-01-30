@@ -106,7 +106,7 @@ class CSVReader(Reader):
                     id=str(uuid4()),
                     content="\n".join(csv_lines),
                 )
-            ]
+            ] if csv_lines else []
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -176,7 +176,7 @@ class CSVReader(Reader):
                         id=str(uuid4()),
                         content=csv_content,
                     )
-                ]
+                ] if csv_content else []
             else:
                 # Large files: paginate and process in parallel
                 pages = []
@@ -198,6 +198,7 @@ class CSVReader(Reader):
                 documents = await asyncio.gather(
                     *[_process_page(page_number, page) for page_number, page in enumerate(pages, start=1)]
                 )
+                documents = [doc for doc in documents if doc and doc.content]
 
             if self.chunk:
                 documents = await self.chunk_documents_async(documents)

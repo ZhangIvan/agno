@@ -78,7 +78,7 @@ class PPTXReader(Reader):
                     id=str(uuid4()),
                     content=doc_content,
                 )
-            ]
+            ] if doc_content else []
 
             if self.chunk:
                 chunked_documents = []

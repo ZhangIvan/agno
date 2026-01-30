@@ -75,7 +75,7 @@ class MarkdownReader(Reader):
                 file.seek(0)
                 file_contents = file.read().decode(self.encoding or "utf-8")
 
-            documents = [Document(name=file_name, id=str(uuid.uuid4()), content=file_contents)]
+            documents = [Document(name=file_name, id=str(uuid.uuid4()), content=file_contents)] if file_contents else []
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -113,11 +113,11 @@ class MarkdownReader(Reader):
                 name=file_name,
                 id=str(uuid.uuid4()),
                 content=file_contents,
-            )
+            ) if file_contents else None
 
-            if self.chunk:
+            if self.chunk and document:
                 return await self._async_chunk_document(document)
-            return [document]
+            return [document] if document else []
         except Exception as e:
             log_error(f"Error reading asynchronously: {file}: {e}")
             raise ValueError(f"Error reading asynchronously: {file}: {e}")

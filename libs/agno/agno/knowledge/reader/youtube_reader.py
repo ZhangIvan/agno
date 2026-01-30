@@ -63,7 +63,7 @@ class YouTubeReader(Reader):
                     content=transcript_text.strip(),
                 )
             ]
-
+            documents = [doc for doc in documents if doc and doc.content]
             if self.chunk:
                 chunked_documents = []
                 for document in documents:

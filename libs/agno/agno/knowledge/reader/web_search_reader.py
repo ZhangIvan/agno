@@ -242,18 +242,20 @@ class WebSearchReader(Reader):
 
             # Create document
             document = self._create_document_from_url(url, content, result)
+            document = document if document.content else None
 
             # Apply chunking if enabled
-            if self.chunk:
+            if self.chunk and document:
                 chunked_docs = self.chunk_document(document)
                 documents.extend(chunked_docs)
             else:
-                documents.append(document)
+                documents.append(document) if document else ...
 
             # Stop if we've reached max_results
             if len(documents) >= self.max_results:
                 break
 
+        documents = [doc for doc in documents if doc and doc.content]
         log_debug(f"Created {len(documents)} documents from web search")
         return documents
 
@@ -310,6 +312,6 @@ class WebSearchReader(Reader):
 
                 if len(documents) >= self.max_results:
                     break
-
+        documents = [doc for doc in documents if doc and doc.content]
         log_debug(f"Created {len(documents)} documents from async web search")
         return documents

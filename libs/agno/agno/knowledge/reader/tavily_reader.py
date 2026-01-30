@@ -109,20 +109,23 @@ class TavilyReader(Reader):
             # Extract content from response
             if not response or "results" not in response:
                 logger.warning(f"No results received for URL: {url}")
-                return [Document(name=name or url, id=url, content="")]
+                # return []
+                raise ValueError(f"No results received for URL: {url}")
 
             results = response.get("results", [])
             if not results:
                 logger.warning(f"Empty results for URL: {url}")
-                return [Document(name=name or url, id=url, content="")]
+                # return []
+                raise ValueError(f"No results received for URL: {url}")
 
             # Get the first result (since we're extracting a single URL)
             result = results[0]
 
             # Check if extraction failed
             if "failed_reason" in result:
-                logger.warning(f"Extraction failed for {url}: {result['failed_reason']}")
-                return [Document(name=name or url, id=url, content="")]
+                # logger.warning(f"Extraction failed for {url}: {result['failed_reason']}")
+                # return []
+                raise ValueError(f"Extraction failed for {url}: {result['failed_reason']}")
 
             # Get raw content
             content = result.get("raw_content", "")
@@ -141,6 +144,7 @@ class TavilyReader(Reader):
                 documents.extend(self.chunk_document(Document(name=name or url, id=url, content=content)))
             else:
                 documents.append(Document(name=name or url, id=url, content=content))
+            documents = [doc for doc in documents if doc and doc.content]
             return documents
 
         except Exception as e:

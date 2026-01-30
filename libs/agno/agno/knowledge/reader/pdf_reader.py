@@ -251,27 +251,29 @@ class BasePDFReader(Reader):
             raise ValueError(f'Error decrypting PDF file "{doc_name}": {e}')
 
     def _create_documents(self, pdf_content: List[str], doc_name: str, use_uuid_for_id: bool, page_number_shift):
+        documents: List[Document] = []
         if self.split_on_pages:
             shift = page_number_shift if page_number_shift is not None else 1
-            documents: List[Document] = []
             for page_number, page_content in enumerate(pdf_content, start=shift):
-                documents.append(
-                    Document(
-                        name=doc_name,
-                        id=(str(uuid4()) if use_uuid_for_id else f"{doc_name}_{page_number}"),
-                        meta_data={"page": page_number},
-                        content=page_content,
+                if page_content:
+                    documents.append(
+                        Document(
+                            name=doc_name,
+                            id=(str(uuid4()) if use_uuid_for_id else f"{doc_name}_{page_number}"),
+                            meta_data={"page": page_number},
+                            content=page_content,
+                        )
                     )
-                )
         else:
-            pdf_content_str = "\n".join(pdf_content)
-            document = Document(
-                name=doc_name,
-                id=str(uuid4()) if use_uuid_for_id else doc_name,
-                meta_data={},
-                content=pdf_content_str,
-            )
-            documents = [document]
+            if pdf_content:
+                pdf_content_str = "\n".join(pdf_content)
+                document = Document(
+                    name=doc_name,
+                    id=str(uuid4()) if use_uuid_for_id else doc_name,
+                    meta_data={},
+                    content=pdf_content_str,
+                )
+                documents.append(document)
 
         if self.chunk:
             return self._build_chunked_documents(documents)

@@ -62,7 +62,7 @@ class JSONReader(Reader):
                     meta_data={"page": page_number},
                     content=json.dumps(content),
                 )
-                for page_number, content in enumerate(json_contents, start=1)
+                for page_number, content in enumerate(json_contents, start=1) if content
             ]
             if self.chunk:
                 chunked_documents = []

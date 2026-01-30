@@ -397,6 +397,7 @@ class WebsiteReader(Reader):
                             content=crawled_content,
                         )
                     )
+            documents = [doc for doc in documents if doc and doc.content]
             return documents
         except (httpx.HTTPStatusError, httpx.RequestError) as e:
             log_error(f"Error reading website {url}: {e}")
@@ -451,7 +452,7 @@ class WebsiteReader(Reader):
             # Flatten the results
             for doc_list in results:
                 documents.extend(doc_list)
-
+            documents = [doc for doc in documents if doc and doc.content]
             return documents
         except (httpx.HTTPStatusError, httpx.RequestError) as e:
             log_error(f"Error reading website asynchronously {url}: {e}")

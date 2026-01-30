@@ -174,6 +174,7 @@ class ExcelReader(Reader):
             else:
                 raise ValueError(f"Unsupported file extension: '{file_extension}'. Expected .xlsx or .xls")
 
+            documents = [doc for doc in documents if doc and doc.content]
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -212,6 +213,7 @@ class ExcelReader(Reader):
             else:
                 raise ValueError(f"Unsupported file extension: '{file_extension}'. Expected .xlsx or .xls")
 
+            documents = [doc for doc in documents if doc and doc.content]
             if self.chunk:
                 documents = await self.chunk_documents_async(documents)
 
