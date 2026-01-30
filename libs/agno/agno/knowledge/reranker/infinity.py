@@ -17,8 +17,11 @@ class InfinityReranker(Reranker):
     model: str = "BAAI/bge-reranker-base"
     host: str = "localhost"
     port: int = 7997
+    # 完整请求地址：http://localhost:7997/xxxx  但不包含 /rerank  由后续行为去添加
     url: Optional[str] = None
     top_n: Optional[int] = None
+    # 过滤分数阈值 >>> 在 top_n 的基础上在过滤分值
+    score_threshold: Optional[float] = None
     api_key: Optional[str] = None
     verify_ssl: bool = True
     _client: Optional[Any] = None
@@ -41,7 +44,7 @@ class InfinityReranker(Reranker):
     @property
     def base_url(self) -> str:
         """Construct the base URL for the Infinity server"""
-        return f"http://{self.host}:{self.port}"
+        return self.url or f"http://{self.host}:{self.port}"
 
     @property
     def client(self) -> Any:
@@ -67,6 +70,12 @@ class InfinityReranker(Reranker):
         if top_n and not (0 < top_n):
             logger.warning(f"top_n should be a positive integer, got {self.top_n}, setting top_n to None")
             top_n = None
+
+        if self.score_threshold and not (0 < self.score_threshold):
+            logger.warning(
+                f"score_threshold should be a positive float, got {self.score_threshold}, setting score_threshold to None"
+            )
+            self.score_threshold = None
 
         compressed_docs: list[Document] = []
 
@@ -116,6 +125,9 @@ class InfinityReranker(Reranker):
                 if top_n and len(compressed_docs) > top_n:
                     compressed_docs = compressed_docs[:top_n]
 
+                if self.score_threshold is not None:
+                    compressed_docs = [doc for doc in compressed_docs if doc.reranking_score >= self.score_threshold]
+
         except Exception as e:
             logger.error(f"Error connecting to Infinity server at {self.base_url}: {e}")
             return documents
@@ -139,6 +151,11 @@ class InfinityReranker(Reranker):
         if top_n and not (0 < top_n):
             logger.warning(f"top_n should be a positive integer, got {self.top_n}, setting top_n to None")
             top_n = None
+        if self.score_threshold and not (0 < self.score_threshold):
+            logger.warning(
+                f"score_threshold should be a positive float, got {self.score_threshold}, setting score_threshold to None"
+            )
+            self.score_threshold = None
 
         compressed_docs: list[Document] = []
 
@@ -187,6 +204,9 @@ class InfinityReranker(Reranker):
                 # Limit to top_n if specified and not already limited by the API
                 if top_n and len(compressed_docs) > top_n:
                     compressed_docs = compressed_docs[:top_n]
+
+                if self.score_threshold is not None:
+                    compressed_docs = [doc for doc in compressed_docs if doc.reranking_score >= self.score_threshold]
 
         except Exception as e:
             logger.error(f"Error connecting to Infinity server at {self.base_url}: {e}")
