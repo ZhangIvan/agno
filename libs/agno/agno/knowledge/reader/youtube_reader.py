@@ -63,7 +63,7 @@ class YouTubeReader(Reader):
                     content=transcript_text.strip(),
                 )
             ]
-
+            documents = [doc for doc in documents if doc and doc.content]
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -73,7 +73,7 @@ class YouTubeReader(Reader):
 
         except Exception as e:
             log_error(f"Error reading transcript for {url}: {e}")
-            return []
+            raise ValueError(f"Error reading transcript for {url}: {e}")
 
     async def async_read(self, url: str) -> List[Document]:
         return await asyncio.get_event_loop().run_in_executor(None, self.read, url)

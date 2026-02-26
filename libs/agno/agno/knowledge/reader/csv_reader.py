@@ -106,7 +106,7 @@ class CSVReader(Reader):
                     id=str(uuid4()),
                     content="\n".join(csv_lines),
                 )
-            ]
+            ] if csv_lines else []
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -118,11 +118,11 @@ class CSVReader(Reader):
         except UnicodeDecodeError as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Encoding error reading {file_desc}: {e}. Try specifying a different encoding.")
-            return []
+            raise ValueError(f"Encoding error reading {file_desc}: {e}")
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")
 
     async def async_read(
         self,
@@ -176,7 +176,7 @@ class CSVReader(Reader):
                         id=str(uuid4()),
                         content=csv_content,
                     )
-                ]
+                ] if csv_content else []
             else:
                 # Large files: paginate and process in parallel
                 pages = []
@@ -198,6 +198,7 @@ class CSVReader(Reader):
                 documents = await asyncio.gather(
                     *[_process_page(page_number, page) for page_number, page in enumerate(pages, start=1)]
                 )
+                documents = [doc for doc in documents if doc and doc.content]
 
             if self.chunk:
                 documents = await self.chunk_documents_async(documents)
@@ -208,8 +209,9 @@ class CSVReader(Reader):
         except UnicodeDecodeError as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Encoding error reading {file_desc}: {e}. Try specifying a different encoding.")
-            return []
+            raise ValueError(f"Encoding error reading {file_desc}: {e}")
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")
+

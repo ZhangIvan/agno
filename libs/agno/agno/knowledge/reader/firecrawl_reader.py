@@ -96,6 +96,7 @@ class FirecrawlReader(Reader):
             documents.extend(self.chunk_document(Document(name=name or url, id=url, content=content)))
         else:
             documents.append(Document(name=name or url, id=url, content=content))
+        documents = [doc for doc in documents if doc and doc.content]
         return documents
 
     async def async_scrape(self, url: str, name: Optional[str] = None) -> List[Document]:
@@ -149,7 +150,7 @@ class FirecrawlReader(Reader):
                     documents.extend(self.chunk_document(Document(name=name or url, id=url, content=content)))
                 else:
                     documents.append(Document(name=name or url, id=url, content=content))
-
+        documents = [doc for doc in documents if doc and doc.content]
         return documents
 
     async def async_crawl(self, url: str, name: Optional[str] = None) -> List[Document]:

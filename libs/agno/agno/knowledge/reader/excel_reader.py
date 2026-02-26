@@ -174,6 +174,7 @@ class ExcelReader(Reader):
             else:
                 raise ValueError(f"Unsupported file extension: '{file_extension}'. Expected .xlsx or .xls")
 
+            documents = [doc for doc in documents if doc and doc.content]
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -187,7 +188,7 @@ class ExcelReader(Reader):
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")
 
     async def async_read(
         self,
@@ -212,6 +213,7 @@ class ExcelReader(Reader):
             else:
                 raise ValueError(f"Unsupported file extension: '{file_extension}'. Expected .xlsx or .xls")
 
+            documents = [doc for doc in documents if doc and doc.content]
             if self.chunk:
                 documents = await self.chunk_documents_async(documents)
 
@@ -222,4 +224,4 @@ class ExcelReader(Reader):
         except Exception as e:
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
-            return []
+            raise ValueError(f"Error reading {file_desc}: {e}")

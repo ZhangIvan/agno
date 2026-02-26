@@ -119,7 +119,7 @@ class WebSearchReader(Reader):
                     time.sleep(self.search_delay)
                 else:
                     logger.error(f"All DuckDuckGo search attempts failed: {e}")
-                    return []
+                    raise ValueError(f"All DuckDuckGo search attempts failed: {e}")
         return []
 
     def _perform_web_search(self, query: str) -> List[Dict[str, str]]:
@@ -128,7 +128,7 @@ class WebSearchReader(Reader):
             return self._perform_duckduckgo_search(query)
         else:
             logger.error(f"Unsupported search engine: {self.search_engine}")
-            return []
+            raise ValueError(f"Unsupported search engine: {self.search_engine}")
 
     def _is_valid_url(self, url: str) -> bool:
         """Check if URL is valid and not already visited"""
@@ -220,7 +220,7 @@ class WebSearchReader(Reader):
         search_results = self._perform_web_search(query)
         if not search_results:
             logger.warning(f"No search results found for query: {query}")
-            return []
+            raise ValueError(f"No search results found for query: {query}")
 
         documents: List[Document] = []
 
@@ -245,18 +245,20 @@ class WebSearchReader(Reader):
 
             # Create document
             document = self._create_document_from_url(url, content, result)
+            document = document if document.content else None
 
             # Apply chunking if enabled
-            if self.chunk:
+            if self.chunk and document:
                 chunked_docs = self.chunk_document(document)
                 documents.extend(chunked_docs)
             else:
-                documents.append(document)
+                documents.append(document) if document else ...
 
             # Stop if we've reached max_results
             if len(documents) >= self.max_results:
                 break
 
+        documents = [doc for doc in documents if doc and doc.content]
         log_debug(f"Created {len(documents)} documents from web search")
         return documents
 
@@ -273,7 +275,7 @@ class WebSearchReader(Reader):
         search_results = self._perform_web_search(query)
         if not search_results:
             logger.warning(f"No search results found for query: {query}")
-            return []
+            raise ValueError(f"No search results found for query: {query}")
 
         async def fetch_url_async(result: Dict[str, str]) -> Optional[Document]:
             url = result.get("url", "")
@@ -299,7 +301,7 @@ class WebSearchReader(Reader):
 
             except Exception as e:
                 logger.warning(f"Error fetching {url}: {e}")
-                return None
+                raise ValueError(f"Error fetching {url}: {e}")
 
         documents = []
         for i, result in enumerate(search_results):
@@ -316,6 +318,6 @@ class WebSearchReader(Reader):
 
                 if len(documents) >= self.max_results:
                     break
-
+        documents = [doc for doc in documents if doc and doc.content]
         log_debug(f"Created {len(documents)} documents from async web search")
         return documents
