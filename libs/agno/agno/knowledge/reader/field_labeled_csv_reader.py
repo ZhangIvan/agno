@@ -162,8 +162,9 @@ class FieldLabeledCSVReader(Reader):
         except FileNotFoundError:
             raise
         except Exception as e:
-            log_error(f"Error reading: {getattr(file, 'name', str(file)) if isinstance(file, IO) else file}: {e}")
-            return []
+            _err_msg = f"Error reading: {getattr(file, 'name', str(file)) if isinstance(file, IO) else file}: {e}"
+            log_error(_err_msg)
+            raise ValueError(_err_msg)
 
     async def async_read(
         self,
@@ -278,5 +279,6 @@ class FieldLabeledCSVReader(Reader):
         except FileNotFoundError:
             raise
         except Exception as e:
-            log_error(f"Error reading async: {getattr(file, 'name', str(file)) if isinstance(file, IO) else file}: {e}")
-            return []
+            _err_msg = f"Error reading async: {getattr(file, 'name', str(file)) if isinstance(file, IO) else file}: {e}"
+            log_error(_err_msg)
+            raise ValueError(_err_msg)

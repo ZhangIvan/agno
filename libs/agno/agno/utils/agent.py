@@ -1119,5 +1119,5 @@ def validate_input(
     # Case 3: Other types not supported for structured input
     else:
         raise ValueError(
-            f"Cannot validate {type(input)} against input_schema. Expected dict or {input_schema.__name__} instance."
+            f"Cannot validate {type(input)} against input_schema. Expected dict or {input_schema.__name__ if isinstance(input_schema, BaseModel) else input_schema} instance."
         )

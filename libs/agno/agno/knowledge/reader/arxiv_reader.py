@@ -57,16 +57,17 @@ class ArxivReader(Reader):
         search = arxiv.Search(query=query, max_results=self.max_results, sort_by=self.sort_by)
 
         for result in search.results():
-            links = ", ".join([x.href for x in result.links])
+            if result.summary:
+                links = ", ".join([x.href for x in result.links])
 
-            documents.append(
-                Document(
-                    name=result.title,
-                    id=result.title,
-                    meta_data={"pdf_url": str(result.pdf_url), "article_links": links},
-                    content=result.summary,
+                documents.append(
+                    Document(
+                        name=result.title,
+                        id=result.title,
+                        meta_data={"pdf_url": str(result.pdf_url), "article_links": links},
+                        content=result.summary,
+                    )
                 )
-            )
 
         return documents
 
