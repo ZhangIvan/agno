@@ -83,7 +83,8 @@ def convert_dependencies_to_string(agent: Agent, context: Dict[str, Any]) -> str
         return ""
 
     try:
-        return json.dumps(context, indent=2, default=str)
+        # 保留中文
+        return json.dumps(context, indent=2, default=str, ensure_ascii=False)
     except (TypeError, ValueError, OverflowError) as e:
         log_warning(f"Failed to convert context to JSON: {e}")
         # Attempt a fallback conversion for non-serializable objects
