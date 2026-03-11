@@ -1,4 +1,5 @@
 import json
+import os
 
 try:
     from spider import Spider as ExternalSpider
