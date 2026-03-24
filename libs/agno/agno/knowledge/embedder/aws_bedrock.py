@@ -376,13 +376,26 @@ class AwsBedrockEmbedder(Embedder):
         usage = response.get("usage")
         return embedding, usage
 
+    @staticmethod
+    def _to_image_data_uri(image_path_or_uri: str) -> str:
+        """Convert a local file path to a base64 data URI if needed."""
+        if image_path_or_uri.startswith("data:"):
+            return image_path_or_uri
+        import base64
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(image_path_or_uri)
+        mime_type = mime_type or "image/png"
+        with open(image_path_or_uri, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        return f"data:{mime_type};base64,{encoded}"
+
     def get_image_embedding(self, image_data_uri: str) -> List[float]:
         """
         Get embeddings for an image (v4 only).
 
         Args:
-            image_data_uri (str): Base64 data URI of the image
-                (e.g., "data:image/png;base64,...")
+            image_data_uri (str): Base64 data URI (e.g., "data:image/png;base64,...")
+                or a local file path to an image.
 
         Returns:
             List[float]: The embedding vector.
@@ -394,7 +407,8 @@ class AwsBedrockEmbedder(Embedder):
             )
 
         try:
-            body = self._format_multimodal_request_body(images=[image_data_uri])
+            data_uri = self._to_image_data_uri(image_data_uri)
+            body = self._format_multimodal_request_body(images=[data_uri])
             response = self.get_client().invoke_model(
                 modelId=self.id,
                 body=body,
@@ -504,6 +518,9 @@ class AwsBedrockEmbedder(Embedder):
     async def async_get_image_embedding(self, image_data_uri: str) -> List[float]:
         """
         Async version of get_image_embedding() (v4 only).
+
+        Args:
+            image_data_uri (str): Base64 data URI or local file path.
         """
         if not self._is_v4_model():
             raise AgnoError(
@@ -512,7 +529,8 @@ class AwsBedrockEmbedder(Embedder):
             )
 
         try:
-            body = self._format_multimodal_request_body(images=[image_data_uri])
+            data_uri = self._to_image_data_uri(image_data_uri)
+            body = self._format_multimodal_request_body(images=[data_uri])
             async with self.get_async_client() as client:
                 response = await client.invoke_model(
                     modelId=self.id,

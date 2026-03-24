@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import IO, Any, List, Optional, Union
 from uuid import uuid4
@@ -8,7 +9,7 @@ from agno.knowledge.chunking.strategy import ChunkingStrategy, ChunkingStrategyT
 from agno.knowledge.document.base import Document
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.types import ContentType
-from agno.utils.log import log_debug, log_error
+from agno.utils.log import log_debug, log_error, log_warning
 
 try:
     from docx import Document as DocxDocument  # type: ignore
@@ -19,7 +20,18 @@ except ImportError:
 class DocxReader(Reader):
     """Reader for Doc/Docx files"""
 
-    def __init__(self, chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(), **kwargs):
+    def __init__(
+        self,
+        chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(),
+        capture_pages: bool = True,
+        pages_cache_dir: Optional[str] = None,
+        image_dpi: int = 150,
+        **kwargs,
+    ):
+        self.capture_pages = capture_pages
+        self.pages_cache_dir = pages_cache_dir or os.getenv("AGNO_PAGE_CACHE_DIR")
+
+        self.image_dpi = image_dpi
         super().__init__(chunking_strategy=chunking_strategy, **kwargs)
 
     @classmethod
@@ -41,12 +53,14 @@ class DocxReader(Reader):
     def read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         """Read a docx file and return a list of documents"""
         try:
+            file_path: Optional[str] = None
             if isinstance(file, Path):
                 if not file.exists():
                     raise FileNotFoundError(f"Could not find file: {file}")
                 log_debug(f"Reading: {file}")
                 docx_document = DocxDocument(str(file))
                 doc_name = name or file.stem
+                file_path = str(file)
             else:
                 log_debug(f"Reading uploaded file: {getattr(file, 'name', 'BytesIO')}")
                 docx_document = DocxDocument(file)
@@ -54,19 +68,58 @@ class DocxReader(Reader):
 
             doc_content = "\n\n".join([para.text for para in docx_document.paragraphs])
 
-            documents = [
-                Document(
-                    name=doc_name,
-                    id=str(uuid4()),
-                    content=doc_content,
-                )
-            ] if doc_content else []
+            documents: List[Document] = (
+                [Document(name=doc_name, id=str(uuid4()), content=doc_content)] if doc_content else []
+            )
             if self.chunk:
-                chunked_documents = []
+                chunked_documents: List[Document] = []
                 for document in documents:
                     chunked_documents.extend(self.chunk_document(document))
-                return chunked_documents
-            return documents
+                result = chunked_documents
+            else:
+                result = documents
+
+            # Capture page images if requested
+            if self.capture_pages and file_path and result:
+                try:
+                    from agno.knowledge.reader.page_capture import capture_docx_pages, get_page_cache_dir
+                    cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
+                    page_images = capture_docx_pages(file_path, cache_dir, dpi=self.image_dpi)
+                    total_pages = len(page_images)
+
+                    # Assign page images to chunks by proportional mapping
+                    total_chunks = len(result)
+                    for chunk_index, doc in enumerate(result):
+                        if total_pages > 0 and total_chunks > 0:
+                            # Map chunk index → approximate page number (1-based)
+                            approx_page = max(1, round((chunk_index / total_chunks) * total_pages) + 1)
+                            approx_page = min(approx_page, total_pages)
+                            doc.meta_data["page_number"] = approx_page
+                            doc.meta_data["total_pages"] = total_pages
+                            doc.meta_data["doc_type"] = "text_chunk"
+                            if approx_page in page_images:
+                                doc.meta_data["page_image_path"] = page_images[approx_page]
+
+                    # Append image documents for multimodal embedding
+                    for page_num, image_path in page_images.items():
+                        result.append(
+                            Document(
+                                name=doc_name,
+                                id=f"{doc_name}_img_{page_num}",
+                                content="",
+                                meta_data={
+                                    "doc_type": "page_image",
+                                    "page_number": page_num,
+                                    "total_pages": total_pages,
+                                    "page_image_path": image_path,
+                                },
+                                content_id=f"{doc_name}_page_{page_num}",
+                            )
+                        )
+                except Exception as e:
+                    log_warning(f"Failed to capture DOCX page images: {e}")
+
+            return result
 
         except Exception as e:
             log_error(f"Error reading file: {e}")

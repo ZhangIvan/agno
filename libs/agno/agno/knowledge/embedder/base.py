@@ -21,3 +21,11 @@ class Embedder:
 
     async def async_get_embedding_and_usage(self, text: str) -> Tuple[List[float], Optional[Dict]]:
         raise NotImplementedError
+
+    def get_image_embedding(self, image_path: str) -> Optional[List[float]]:
+        """Get embedding for an image file. Returns None if not supported by this embedder."""
+        raise NotImplementedError
+
+    async def async_get_image_embedding(self, image_path: str) -> Optional[List[float]]:
+        """Async get embedding for an image file. Returns None if not supported by this embedder."""
+        raise NotImplementedError

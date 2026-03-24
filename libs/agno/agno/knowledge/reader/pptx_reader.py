@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 from typing import IO, Any, List, Optional, Union
 from uuid import uuid4
@@ -8,7 +9,7 @@ from agno.knowledge.chunking.strategy import ChunkingStrategy, ChunkingStrategyT
 from agno.knowledge.document.base import Document
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.types import ContentType
-from agno.utils.log import log_debug, log_error
+from agno.utils.log import log_debug, log_error, log_warning
 
 try:
     from pptx import Presentation  # type: ignore
@@ -19,7 +20,17 @@ except ImportError:
 class PPTXReader(Reader):
     """Reader for PPTX files"""
 
-    def __init__(self, chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(), **kwargs):
+    def __init__(
+        self,
+        chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(),
+        capture_pages: bool = True,
+        pages_cache_dir: Optional[str] = None,
+        image_dpi: int = 150,
+        **kwargs,
+    ):
+        self.capture_pages = capture_pages
+        self.pages_cache_dir = pages_cache_dir or os.getenv("AGNO_PAGE_CACHE_DIR")
+        self.image_dpi = image_dpi
         super().__init__(chunking_strategy=chunking_strategy, **kwargs)
 
     @classmethod
@@ -39,53 +50,88 @@ class PPTXReader(Reader):
         return [ContentType.PPTX]
 
     def read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
-        """Read a pptx file and return a list of documents"""
+        """Read a pptx file and return a list of documents (one per slide)."""
         try:
+            file_path: Optional[str] = None
             if isinstance(file, Path):
                 if not file.exists():
                     raise FileNotFoundError(f"Could not find file: {file}")
                 log_debug(f"Reading: {file}")
                 presentation = Presentation(str(file))
                 doc_name = name or file.stem
+                file_path = str(file)
             else:
                 log_debug(f"Reading uploaded file: {getattr(file, 'name', 'BytesIO')}")
                 presentation = Presentation(file)
                 doc_name = name or getattr(file, "name", "pptx_file").split(".")[0]
 
-            # Extract text from all slides
-            slide_texts = []
-            for slide_number, slide in enumerate(presentation.slides, 1):
-                slide_text = f"Slide {slide_number}:\n"
+            total_slides = len(presentation.slides)
 
-                # Extract text from shapes that contain text
+            # Capture slide images if requested (file path required)
+            page_images: Optional[dict] = None
+            if self.capture_pages and file_path:
+                try:
+                    from agno.knowledge.reader.page_capture import capture_pptx_slides, get_page_cache_dir
+                    cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
+                    page_images = capture_pptx_slides(file_path, cache_dir, dpi=self.image_dpi)
+                except Exception as e:
+                    log_warning(f"Failed to capture PPTX slide images: {e}")
+
+            # Build one Document per slide
+            documents: List[Document] = []
+            for slide_number, slide in enumerate(presentation.slides, 1):
                 text_content = []
                 for shape in slide.shapes:
                     if hasattr(shape, "text") and shape.text.strip():
                         text_content.append(shape.text.strip())
 
-                if text_content:
-                    slide_text += "\n".join(text_content)
-                else:
-                    slide_text += "(No text content)"
+                slide_text = f"Slide {slide_number}:\n"
+                slide_text += "\n".join(text_content) if text_content else "(No text content)"
 
-                slide_texts.append(slide_text)
+                meta: dict = {
+                    "page_number": slide_number,
+                    "total_pages": total_slides,
+                    "doc_type": "text_chunk",
+                }
+                if page_images and slide_number in page_images:
+                    meta["page_image_path"] = page_images[slide_number]
 
-            doc_content = "\n\n".join(slide_texts)
-
-            documents = [
-                Document(
-                    name=doc_name,
-                    id=str(uuid4()),
-                    content=doc_content,
+                documents.append(
+                    Document(
+                        name=doc_name,
+                        id=str(uuid4()),
+                        meta_data=meta,
+                        content=slide_text,
+                    )
                 )
-            ] if doc_content else []
 
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
                     chunked_documents.extend(self.chunk_document(document))
-                return chunked_documents
-            return documents
+                result = chunked_documents
+            else:
+                result = documents
+
+            # Append image documents for multimodal embedding
+            if page_images:
+                for slide_num, image_path in page_images.items():
+                    result.append(
+                        Document(
+                            name=doc_name,
+                            id=f"{doc_name}_img_{slide_num}",
+                            content="",
+                            meta_data={
+                                "doc_type": "page_image",
+                                "page_number": slide_num,
+                                "total_pages": total_slides,
+                                "page_image_path": image_path,
+                            },
+                            content_id=f"{doc_name}_page_{slide_num}",
+                        )
+                    )
+
+            return result
 
         except Exception as e:
             log_error(f"Error reading file: {e}")

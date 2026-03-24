@@ -1,7 +1,8 @@
 import asyncio
+import os
 import re
 from pathlib import Path
-from typing import IO, Any, List, Optional, Tuple, Union
+from typing import IO, Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from agno.knowledge.chunking.document import DocumentChunking
@@ -9,7 +10,7 @@ from agno.knowledge.chunking.strategy import ChunkingStrategy, ChunkingStrategyT
 from agno.knowledge.document.base import Document
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.types import ContentType
-from agno.utils.log import log_debug, log_error
+from agno.utils.log import log_debug, log_error, log_warning
 
 try:
     from pypdf import PdfReader as DocumentReader  # noqa: F401
@@ -207,6 +208,9 @@ class BasePDFReader(Reader):
         password: Optional[str] = None,
         sanitize_content: bool = True,
         chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(chunk_size=5000),
+        capture_pages: bool = True,
+        pages_cache_dir: Optional[str] = None,
+        image_dpi: int = 150,
         **kwargs,
     ):
         if page_start_numbering_format is None:
@@ -219,6 +223,9 @@ class BasePDFReader(Reader):
         self.page_end_numbering_format = page_end_numbering_format
         self.password = password
         self.sanitize_content = sanitize_content
+        self.capture_pages = capture_pages
+        self.pages_cache_dir = pages_cache_dir or os.getenv("AGNO_PAGE_CACHE_DIR")
+        self.image_dpi = image_dpi
 
         super().__init__(chunking_strategy=chunking_strategy, **kwargs)
 
@@ -273,17 +280,37 @@ class BasePDFReader(Reader):
             log_error(f'Error decrypting PDF file "{doc_name}": {e}')
             raise ValueError(f'Error decrypting PDF file "{doc_name}": {e}')
 
-    def _create_documents(self, pdf_content: List[str], doc_name: str, use_uuid_for_id: bool, page_number_shift):
+    def _create_documents(
+        self,
+        pdf_content: List[str],
+        doc_name: str,
+        use_uuid_for_id: bool,
+        page_number_shift,
+        page_images: Optional[Dict[int, str]] = None,
+        pages_cache_dir: Optional[str] = None,
+    ):
         documents: List[Document] = []
+        total_pages = len(pdf_content)
+
         if self.split_on_pages:
             shift = page_number_shift if page_number_shift is not None else 1
-            for page_number, page_content in enumerate(pdf_content, start=shift):
+            for page_index, page_content in enumerate(pdf_content):
+                page_number = page_index + shift
                 if page_content:
+                    meta: dict = {"page": page_number, "page_number": page_number, "total_pages": total_pages}
+                    if page_images:
+                        # page_images is keyed 1-based; map by index+1 (not shifted page label)
+                        raw_page_num = page_index + 1
+                        if raw_page_num in page_images:
+                            meta["page_image_path"] = page_images[raw_page_num]
+                            meta["doc_type"] = "text_chunk"
+                            if pages_cache_dir:
+                                meta["pages_cache_dir"] = pages_cache_dir
                     documents.append(
                         Document(
                             name=doc_name,
                             id=(str(uuid4()) if use_uuid_for_id else f"{doc_name}_{page_number}"),
-                            meta_data={"page": page_number},
+                            meta_data=meta,
                             content=page_content,
                         )
                     )
@@ -299,8 +326,32 @@ class BasePDFReader(Reader):
                 documents.append(document)
 
         if self.chunk:
-            return self._build_chunked_documents(documents)
-        return documents
+            text_docs = self._build_chunked_documents(documents)
+        else:
+            text_docs = documents
+
+        # Append image documents (one per page) for multimodal embedding
+        if page_images and self.split_on_pages:
+            for raw_page_num, image_path in page_images.items():
+                img_meta: dict = {
+                    "doc_type": "page_image",
+                    "page_number": raw_page_num,
+                    "total_pages": total_pages,
+                    "page_image_path": image_path,
+                }
+                if pages_cache_dir:
+                    img_meta["pages_cache_dir"] = pages_cache_dir
+                text_docs.append(
+                    Document(
+                        name=doc_name,
+                        id=f"{doc_name}_img_{raw_page_num}",
+                        content="",
+                        meta_data=img_meta,
+                        content_id=f"{doc_name}_page_{raw_page_num}",
+                    )
+                )
+
+        return text_docs
 
     def _pdf_reader_to_documents(
         self,
@@ -308,6 +359,7 @@ class BasePDFReader(Reader):
         doc_name,
         read_images=False,
         use_uuid_for_id=False,
+        pdf_path: Optional[str] = None,
     ):
         pdf_content = []
         pdf_images_text = []
@@ -346,7 +398,21 @@ class BasePDFReader(Reader):
             page_start_numbering_format=self.page_start_numbering_format,
             page_end_numbering_format=self.page_end_numbering_format,
         )
-        return self._create_documents(pdf_content, doc_name, use_uuid_for_id, shift)
+
+        page_images: Optional[Dict[int, str]] = None
+        resolved_cache_dir: Optional[str] = None
+        if self.capture_pages and pdf_path:
+            try:
+                from agno.knowledge.reader.page_capture import capture_pdf_pages, get_page_cache_dir
+                resolved_cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
+                page_images = capture_pdf_pages(pdf_path, resolved_cache_dir, dpi=self.image_dpi)
+            except Exception as e:
+                log_warning(f"Failed to capture PDF page images: {e}")
+
+        return self._create_documents(
+            pdf_content, doc_name, use_uuid_for_id, shift,
+            page_images=page_images, pages_cache_dir=resolved_cache_dir,
+        )
 
     async def _async_pdf_reader_to_documents(
         self,
@@ -354,6 +420,7 @@ class BasePDFReader(Reader):
         doc_name: str,
         read_images=False,
         use_uuid_for_id=False,
+        pdf_path: Optional[str] = None,
     ):
         async def _read_pdf_page(page, read_images) -> Tuple[str, str]:
             # We tried "asyncio.to_thread(page.extract_text)", but it maintains state internally, which leads to issues.
@@ -402,7 +469,22 @@ class BasePDFReader(Reader):
             page_end_numbering_format=self.page_end_numbering_format,
         )
 
-        return self._create_documents(pdf_content_clean, doc_name, use_uuid_for_id, shift)
+        page_images: Optional[Dict[int, str]] = None
+        resolved_cache_dir: Optional[str] = None
+        if self.capture_pages and pdf_path:
+            try:
+                from agno.knowledge.reader.page_capture import capture_pdf_pages, get_page_cache_dir
+                resolved_cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
+                page_images = await asyncio.to_thread(
+                    capture_pdf_pages, pdf_path, resolved_cache_dir, self.image_dpi
+                )
+            except Exception as e:
+                log_warning(f"Failed to capture PDF page images: {e}")
+
+        return self._create_documents(
+            pdf_content_clean, doc_name, use_uuid_for_id, shift,
+            page_images=page_images, pages_cache_dir=resolved_cache_dir,
+        )
 
 
 class PDFReader(BasePDFReader):
@@ -435,8 +517,11 @@ class PDFReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
+        # Resolve file path for page capture (only available for file-based sources)
+        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+
         # Read and chunk
-        return self._pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True)
+        return self._pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
 
     async def async_read(
         self,
@@ -461,8 +546,10 @@ class PDFReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
+        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+
         # Read and chunk.
-        return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True)
+        return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
 
 
 class PDFImageReader(BasePDFReader):
@@ -486,8 +573,10 @@ class PDFImageReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
+        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+
         # Read and chunk.
-        return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True)
+        return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
 
     async def async_read(
         self, pdf: Union[str, Path, IO[Any]], name: Optional[str] = None, password: Optional[str] = None
@@ -508,5 +597,7 @@ class PDFImageReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
+        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+
         # Read and chunk.
-        return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True)
+        return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)

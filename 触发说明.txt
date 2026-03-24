@@ -1,0 +1,79 @@
+● 问题1：多模态处理的触发路径
+
+  不是自动触发的 — 需要明确传入自定义 reader。
+
+  触发链路
+
+  knowledge.insert(path="doc.pdf", reader=PDFReader(capture_pages=True))
+      ↓
+  Knowledge._load_from_path()  [knowledge.py:1459]
+      ↓
+  if content.reader:
+      reader = content.reader          # ← 用你传进来的 reader
+  else:
+      reader = ReaderFactory.get_reader_for_extension(".pdf")
+      # ↑ 这里返回缓存的默认 PDFReader(capture_pages=False)
+      # 不会截图！
+      ↓
+  reader.read(pdf_file)
+      ↓
+  _create_documents() → 生成 text_chunk 文档 + page_image 文档
+      ↓
+  Document.embed() → text → text embedding, page_image → image embedding
+      ↓
+  vectordb.insert(all_docs)
+
+  三种启用方式
+
+  方式一：单次调用指定 reader（推荐）
+  from agno.knowledge.reader.pdf_reader import PDFReader
+
+  reader = PDFReader(capture_pages=True, image_dpi=150)
+  knowledge.insert(path="report.pdf", reader=reader, upsert=True)
+
+  方式二：设置 knowledge 级别的默认 reader
+  from agno.knowledge.reader.pdf_reader import PDFReader
+
+  knowledge = Knowledge(
+      vector_db=vector_db,
+      use_page_images=True,
+      readers={".pdf": PDFReader(capture_pages=True, image_dpi=150)},
+  )
+  # 之后所有 .pdf 文件都会走 capture_pages=True
+  knowledge.insert(path="any.pdf")
+
+  方式三：直接传 documents（手动控制）
+  reader = PDFReader(capture_pages=True)
+  docs = reader.read("report.pdf")
+  knowledge.vector_db.insert(documents=docs)
+
+  没有前端触发路径 — agno 本身没有 HTTP 上传 API，完全是代码层调用。如果你有一个 web 服务在接收文件，需要在接收文件的 handler 里调用上述代码。
+
+  ---
+  问题2：现有文本向量能否升级为图像检索？
+
+  可以，但需要重新处理文件，有两条路：
+
+  路径A：重新 insert（最简单，推荐）
+
+  reader = PDFReader(capture_pages=True, image_dpi=150)
+  knowledge.insert(path="existing_doc.pdf", reader=reader, upsert=True)
+  # upsert=True + skip_if_exists 默认 False → 会覆盖旧向量
+
+  这会：
+  1. 重新截图每页 → ~/.agno/page_cache/<doc_name>/page_N.png
+  2. 重新生成 text_chunk 文档（带 page_image_path 元数据）
+  3. 新增 page_image 文档
+  4. 用 upsert 覆盖旧记录
+
+  旧的纯文本记录（没有 doc_type 字段）会被替换。
+
+  ---
+  路径B：仅截图，不重新向量化（节省 embedding token）
+
+  如果你只想让检索时能用图片，但不想重新跑 embedding，可以只截图然后手动更新元数据。我可以在 Knowledge 类上加一个 migrate_to_page_images() 方法。需要的话告诉我，我来实现它。
+
+  ---
+  关于 use_page_images=True 对旧文档的行为
+
+  如果旧文档没有 page_image_path 元数据，_get_page_images_for_docs() 会静默回落到文本模式——不报错，直接返回文本块内容。所以开启 use_page_images 不会破坏现有文本索引，只是旧文档不会走图像路径。

@@ -27,6 +27,15 @@ class Document:
         if _embedder is None:
             raise ValueError("No embedder provided")
 
+        # Image documents: embed using image embedding when available
+        if self.meta_data.get("doc_type") == "page_image":
+            image_path = self.meta_data.get("page_image_path")
+            if image_path:
+                img_embedding = _embedder.get_image_embedding(image_path)
+                if img_embedding is not None:
+                    self.embedding = img_embedding
+                    return
+
         self.embedding, self.usage = _embedder.get_embedding_and_usage(self.content)
 
     async def async_embed(self, embedder: Optional[Embedder] = None) -> None:
@@ -34,6 +43,16 @@ class Document:
         _embedder = embedder or self.embedder
         if _embedder is None:
             raise ValueError("No embedder provided")
+
+        # Image documents: embed using image embedding when available
+        if self.meta_data.get("doc_type") == "page_image":
+            image_path = self.meta_data.get("page_image_path")
+            if image_path:
+                img_embedding = await _embedder.async_get_image_embedding(image_path)
+                if img_embedding is not None:
+                    self.embedding = img_embedding
+                    return
+
         self.embedding, self.usage = await _embedder.async_get_embedding_and_usage(self.content)
 
     def to_dict(self) -> Dict[str, Any]:

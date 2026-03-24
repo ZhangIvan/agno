@@ -54,6 +54,15 @@ class Knowledge(RemoteKnowledge):
     # Default is False for backwards compatibility with existing data.
     isolate_vector_search: bool = False
 
+    # --- Page image retrieval settings ---
+    # When True, retrieved text chunks are replaced by their corresponding page images
+    # when sent to the LLM. Requires documents to have page_image_path in metadata.
+    use_page_images: bool = False
+    # Maximum number of page images to include in a single retrieval response.
+    max_retrieval_images: int = 6
+    # Sliding window around each matched page (±N pages). 1 means prev+current+next.
+    image_window_size: int = 1
+
     def __post_init__(self):
         from agno.vectordb import VectorDb
 
@@ -3077,6 +3086,16 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if not docs:
                 return "No documents found"
 
+            if self.use_page_images and docs:
+                from agno.tools.function import ToolResult
+
+                images = self._get_page_images_for_docs(docs)
+                if images:
+                    return ToolResult(
+                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
+                        images=images,
+                    )
+
             return self._convert_documents_to_string(docs, agent)
 
         async def asearch_knowledge_base(query: str) -> str:
@@ -3113,6 +3132,16 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             if not docs:
                 return "No documents found"
+
+            if self.use_page_images and docs:
+                from agno.tools.function import ToolResult
+
+                images = self._get_page_images_for_docs(docs)
+                if images:
+                    return ToolResult(
+                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
+                        images=images,
+                    )
 
             return self._convert_documents_to_string(docs, agent)
 
@@ -3201,6 +3230,16 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if not docs:
                 return "No documents found"
 
+            if self.use_page_images and docs:
+                from agno.tools.function import ToolResult
+
+                images = self._get_page_images_for_docs(docs)
+                if images:
+                    return ToolResult(
+                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
+                        images=images,
+                    )
+
             return self._convert_documents_to_string(docs, agent)
 
         async def asearch_knowledge_base(query: str, filters: Optional[List[Any]] = None) -> str:
@@ -3260,6 +3299,16 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if not docs:
                 return "No documents found"
 
+            if self.use_page_images and docs:
+                from agno.tools.function import ToolResult
+
+                images = self._get_page_images_for_docs(docs)
+                if images:
+                    return ToolResult(
+                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
+                        images=images,
+                    )
+
             return self._convert_documents_to_string(docs, agent)
 
         if async_mode:
@@ -3270,6 +3319,81 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         # Opt out of strict mode since filters use dynamic types that are incompatible with strict mode
         func.strict = False
         return func
+
+    def _resolve_page_image_path(self, doc: Document, page_num: int) -> Optional[str]:
+        """Resolve the file path to the PNG image for a given page of a document.
+
+        Checks document metadata first, then falls back to the cache directory.
+        """
+        from pathlib import Path
+
+        # Direct match: doc already stores the image path for this exact page
+        if doc.meta_data.get("page_number") == page_num and doc.meta_data.get("page_image_path"):
+            return doc.meta_data["page_image_path"]
+
+        # For adjacent pages (sliding window), look up the cache directory
+        doc_name = doc.name or (doc.content_id or "").split("_page_")[0]
+        if not doc_name:
+            return None
+
+        # Prefer the custom cache dir stored in metadata, then fall back to default
+        cache_base = doc.meta_data.get("pages_cache_dir")
+        if cache_base:
+            cache_path = Path(cache_base) / f"page_{page_num}.png"
+        else:
+            cache_path = Path.home() / ".agno" / "page_cache" / doc_name / f"page_{page_num}.png"
+
+        if cache_path.exists():
+            return str(cache_path)
+        return None
+
+    def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
+        """Collect page images for retrieved documents using a sliding window.
+
+        For each matched document:
+        - If it is a page_image document, include that exact page.
+        - If it is a text chunk, include pages [page-window, ..., page+window].
+
+        Deduplicates by (doc_identifier, page_number) and caps at max_retrieval_images.
+
+        Returns:
+            List of agno.media.Image objects.
+        """
+        from agno.media import Image
+
+        seen: set = set()
+        image_refs: List[tuple] = []  # (doc_id, page_num, image_path)
+
+        for doc in docs:
+            page_num = doc.meta_data.get("page_number")
+            total = doc.meta_data.get("total_pages", 9999)
+            doc_id = doc.content_id or doc.name or ""
+
+            if doc.meta_data.get("doc_type") == "page_image":
+                # Direct image hit — include exactly this page
+                pages_to_add = [page_num] if page_num is not None else []
+            elif page_num is not None:
+                # Text chunk — sliding window
+                pages_to_add = list(
+                    range(
+                        max(1, page_num - self.image_window_size),
+                        min(total, page_num + self.image_window_size) + 1,
+                    )
+                )
+            else:
+                pages_to_add = []
+
+            for p in pages_to_add:
+                key = (doc_id, p)
+                if key not in seen:
+                    img_path = self._resolve_page_image_path(doc, p)
+                    if img_path:
+                        seen.add(key)
+                        image_refs.append((doc_id, p, img_path))
+
+        # Sort by (doc_id, page_number) for consistent ordering
+        image_refs.sort(key=lambda x: (x[0], x[1]))
+        return [Image(filepath=path) for _, _, path in image_refs[: self.max_retrieval_images]]
 
     def _convert_documents_to_string(
         self,
