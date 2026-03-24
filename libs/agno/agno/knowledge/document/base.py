@@ -31,9 +31,10 @@ class Document:
         if self.meta_data.get("doc_type") == "page_image":
             image_path = self.meta_data.get("page_image_path")
             if image_path:
-                img_embedding = _embedder.get_image_embedding(image_path)
+                img_embedding, img_usage = _embedder.get_image_embedding_and_usage(image_path)
                 if img_embedding is not None:
                     self.embedding = img_embedding
+                    self.usage = img_usage
                     return
 
         self.embedding, self.usage = _embedder.get_embedding_and_usage(self.content)
@@ -48,9 +49,10 @@ class Document:
         if self.meta_data.get("doc_type") == "page_image":
             image_path = self.meta_data.get("page_image_path")
             if image_path:
-                img_embedding = await _embedder.async_get_image_embedding(image_path)
+                img_embedding, img_usage = await _embedder.async_get_image_embedding_and_usage(image_path)
                 if img_embedding is not None:
                     self.embedding = img_embedding
+                    self.usage = img_usage
                     return
 
         self.embedding, self.usage = await _embedder.async_get_embedding_and_usage(self.content)

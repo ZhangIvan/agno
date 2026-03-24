@@ -264,21 +264,29 @@ class BasePDFReader(Reader):
         # Use provided password or fall back to instance password
         # Note: Empty string "" is a valid password for PDFs with blank user password
         pdf_password = self.password if password is None else password
+
+        # Try empty password first - many PDFs are marked as encrypted but can be opened with blank password
+        # This matches behavior of WPS and other PDF readers
+        passwords_to_try = [""]
+        if pdf_password is not None and pdf_password != "":
+            passwords_to_try.append(pdf_password)
+
+        for pwd in passwords_to_try:
+            try:
+                decrypted_pdf = doc_reader.decrypt(pwd)
+                if decrypted_pdf:
+                    log_debug(f'Successfully decrypted PDF file "{doc_name}"' + (f' with password' if pwd else ' with empty password'))
+                    return True
+            except Exception as e:
+                log_debug(f'Decrypt attempt with {"empty password" if not pwd else "provided password"} failed: {e}')
+                continue
+
+        # All attempts failed
         if pdf_password is None:
             log_error(f'PDF file "{doc_name}" is password protected but no password provided')
-            return False
-
-        try:
-            decrypted_pdf = doc_reader.decrypt(pdf_password)
-            if decrypted_pdf:
-                log_debug(f'Successfully decrypted PDF file "{doc_name}" with user password')
-                return True
-            else:
-                log_error(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
-                raise ValueError(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
-        except Exception as e:
-            log_error(f'Error decrypting PDF file "{doc_name}": {e}')
-            raise ValueError(f'Error decrypting PDF file "{doc_name}": {e}')
+        else:
+            log_error(f'Failed to decrypt PDF file "{doc_name}": incorrect password')
+        return False
 
     def _create_documents(
         self,
@@ -296,11 +304,13 @@ class BasePDFReader(Reader):
             shift = page_number_shift if page_number_shift is not None else 1
             for page_index, page_content in enumerate(pdf_content):
                 page_number = page_index + shift
+                # raw_page_num is the physical 1-based page index used by page_images and cache filenames
+                raw_page_num = page_index + 1
                 if page_content:
-                    meta: dict = {"page": page_number, "page_number": page_number, "total_pages": total_pages}
+                    # Store raw_page_num as page_number so sliding-window lookups align
+                    # with page_N.png cache filenames; keep display number in "page" field
+                    meta: dict = {"page": page_number, "page_number": raw_page_num, "total_pages": total_pages}
                     if page_images:
-                        # page_images is keyed 1-based; map by index+1 (not shifted page label)
-                        raw_page_num = page_index + 1
                         if raw_page_num in page_images:
                             meta["page_image_path"] = page_images[raw_page_num]
                             meta["doc_type"] = "text_chunk"
@@ -517,11 +527,34 @@ class PDFReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
-        # Resolve file path for page capture (only available for file-based sources)
-        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+        # Resolve file path for page capture
+        _tmp_capture_path: Optional[str] = None
+        if isinstance(pdf, (str, Path)):
+            resolved_path: Optional[str] = str(pdf)
+        elif self.capture_pages:
+            import os, shutil, tempfile
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            shutil.copyfileobj(pdf, _tmp)
+            _tmp.close()
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            resolved_path = _tmp.name
+            _tmp_capture_path = _tmp.name
+        else:
+            resolved_path = None
 
         # Read and chunk
-        return self._pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
+        try:
+            return self._pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
+        finally:
+            if _tmp_capture_path:
+                try:
+                    import os
+                    os.unlink(_tmp_capture_path)
+                except OSError:
+                    pass
 
     async def async_read(
         self,
@@ -546,10 +579,33 @@ class PDFReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
-        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+        _tmp_capture_path: Optional[str] = None
+        if isinstance(pdf, (str, Path)):
+            resolved_path: Optional[str] = str(pdf)
+        elif self.capture_pages:
+            import os, shutil, tempfile
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            shutil.copyfileobj(pdf, _tmp)
+            _tmp.close()
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            resolved_path = _tmp.name
+            _tmp_capture_path = _tmp.name
+        else:
+            resolved_path = None
 
         # Read and chunk.
-        return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
+        try:
+            return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
+        finally:
+            if _tmp_capture_path:
+                try:
+                    import os
+                    os.unlink(_tmp_capture_path)
+                except OSError:
+                    pass
 
 
 class PDFImageReader(BasePDFReader):
@@ -573,10 +629,33 @@ class PDFImageReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
-        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+        _tmp_capture_path: Optional[str] = None
+        if isinstance(pdf, (str, Path)):
+            resolved_path: Optional[str] = str(pdf)
+        elif self.capture_pages:
+            import os, shutil, tempfile
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            shutil.copyfileobj(pdf, _tmp)
+            _tmp.close()
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            resolved_path = _tmp.name
+            _tmp_capture_path = _tmp.name
+        else:
+            resolved_path = None
 
         # Read and chunk.
-        return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
+        try:
+            return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
+        finally:
+            if _tmp_capture_path:
+                try:
+                    import os
+                    os.unlink(_tmp_capture_path)
+                except OSError:
+                    pass
 
     async def async_read(
         self, pdf: Union[str, Path, IO[Any]], name: Optional[str] = None, password: Optional[str] = None
@@ -597,7 +676,30 @@ class PDFImageReader(BasePDFReader):
         if not self._decrypt_pdf(pdf_reader, doc_name, password):
             raise ValueError("Failed to decrypt PDF")
 
-        resolved_path = str(pdf) if isinstance(pdf, (str, Path)) else None
+        _tmp_capture_path: Optional[str] = None
+        if isinstance(pdf, (str, Path)):
+            resolved_path: Optional[str] = str(pdf)
+        elif self.capture_pages:
+            import os, shutil, tempfile
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+            shutil.copyfileobj(pdf, _tmp)
+            _tmp.close()
+            if hasattr(pdf, "seek"):
+                pdf.seek(0)
+            resolved_path = _tmp.name
+            _tmp_capture_path = _tmp.name
+        else:
+            resolved_path = None
 
         # Read and chunk.
-        return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
+        try:
+            return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
+        finally:
+            if _tmp_capture_path:
+                try:
+                    import os
+                    os.unlink(_tmp_capture_path)
+                except OSError:
+                    pass

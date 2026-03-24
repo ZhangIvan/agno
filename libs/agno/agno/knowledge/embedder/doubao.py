@@ -159,9 +159,11 @@ class DoubaoEmbedder(Embedder):
             embedding = self._extract_embedding(response)
             usage = None
             if hasattr(response, "usage") and response.usage is not None:
+                u = response.usage
                 usage = {
-                    "prompt_tokens": getattr(response.usage, "prompt_tokens", None),
-                    "total_tokens": getattr(response.usage, "total_tokens", None),
+                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
                 }
             return embedding, usage
         except Exception as e:
@@ -192,9 +194,11 @@ class DoubaoEmbedder(Embedder):
             embedding = self._extract_embedding(response)
             usage = None
             if hasattr(response, "usage") and response.usage is not None:
+                u = response.usage
                 usage = {
-                    "prompt_tokens": getattr(response.usage, "prompt_tokens", None),
-                    "total_tokens": getattr(response.usage, "total_tokens", None),
+                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
                 }
             return embedding, usage
         except Exception as e:
@@ -226,6 +230,29 @@ class DoubaoEmbedder(Embedder):
             log_warning(f"DoubaoEmbedder.get_image_embedding failed for {image_path}: {e}")
             return None
 
+    def get_image_embedding_and_usage(self, image_path: str) -> Tuple[Optional[List[float]], Optional[Dict]]:
+        """Get image embedding and token usage."""
+        try:
+            image_url = self._file_path_to_image_url(image_path)
+            client = self._sync_client()
+            input_items = [{"type": "image_url", "image_url": {"url": image_url}}]
+            kwargs = self._build_call_kwargs(input_items)
+            log_debug(f"DoubaoEmbedder image embed+usage, model={self.id}, path={image_path}")
+            response = client.multimodal_embeddings.create(**kwargs)
+            embedding = self._extract_embedding(response)
+            usage = None
+            if hasattr(response, "usage") and response.usage is not None:
+                u = response.usage
+                usage = {
+                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
+                }
+            return embedding, usage
+        except Exception as e:
+            log_warning(f"DoubaoEmbedder.get_image_embedding_and_usage failed for {image_path}: {e}")
+            return None, None
+
     async def async_get_image_embedding(self, image_path: str) -> Optional[List[float]]:
         """Async version of get_image_embedding."""
         try:
@@ -241,3 +268,27 @@ class DoubaoEmbedder(Embedder):
         except Exception as e:
             log_warning(f"DoubaoEmbedder.async_get_image_embedding failed for {image_path}: {e}")
             return None
+
+    async def async_get_image_embedding_and_usage(self, image_path: str) -> Tuple[Optional[List[float]], Optional[Dict]]:
+        """Async get image embedding and token usage."""
+        try:
+            image_url = await asyncio.to_thread(self._file_path_to_image_url, image_path)
+            aclient = self._async_client()
+            input_items = [{"type": "image_url", "image_url": {"url": image_url}}]
+            kwargs = self._build_call_kwargs(input_items)
+            log_debug(f"DoubaoEmbedder async image embed+usage, model={self.id}, path={image_path}")
+            async with aclient as client:
+                response = await client.multimodal_embeddings.create(**kwargs)
+            embedding = self._extract_embedding(response)
+            usage = None
+            if hasattr(response, "usage") and response.usage is not None:
+                u = response.usage
+                usage = {
+                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
+                }
+            return embedding, usage
+        except Exception as e:
+            log_warning(f"DoubaoEmbedder.async_get_image_embedding_and_usage failed for {image_path}: {e}")
+            return None, None

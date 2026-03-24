@@ -1,3 +1,4 @@
+import logging
 import asyncio
 from hashlib import md5
 from math import sqrt

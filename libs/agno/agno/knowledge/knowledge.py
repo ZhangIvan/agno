@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import hashlib
 import io
@@ -62,6 +63,10 @@ class Knowledge(RemoteKnowledge):
     max_retrieval_images: int = 6
     # Sliding window around each matched page (±N pages). 1 means prev+current+next.
     image_window_size: int = 1
+    # Optional OSS/cloud storage backend for page images.
+    # When set, page PNGs are uploaded at insert time and signed URLs are returned
+    # at retrieval time instead of local file paths.
+    page_image_storage: Optional[Any] = None  # PageImageStorage instance
 
     def __post_init__(self):
         from agno.vectordb import VectorDb
@@ -2380,6 +2385,9 @@ class Knowledge(RemoteKnowledge):
             await self._aupdate_content(content)
             return
 
+        if self.page_image_storage:
+            read_documents = await self._async_upload_page_images(read_documents)
+
         if self.vector_db.upsert_available() and upsert:
             try:
                 await self.vector_db.async_upsert(content.content_hash, read_documents, content.metadata)  # type: ignore[arg-type]
@@ -2418,6 +2426,9 @@ class Knowledge(RemoteKnowledge):
             content.status_message = "No vector database configured"
             self._update_content(content)
             return
+
+        if self.page_image_storage:
+            read_documents = self._upload_page_images(read_documents)
 
         if self.vector_db.upsert_available() and upsert:
             try:
@@ -3320,18 +3331,97 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         func.strict = False
         return func
 
-    def _resolve_page_image_path(self, doc: Document, page_num: int) -> Optional[str]:
-        """Resolve the file path to the PNG image for a given page of a document.
+    def _upload_page_images(self, docs: List[Document]) -> List[Document]:
+        """Upload page image PNGs to OSS storage and annotate docs with remote URLs.
 
-        Checks document metadata first, then falls back to the cache directory.
+        Called during the insert pipeline when ``page_image_storage`` is set.
+        Adds ``page_image_url`` and ``pages_cache_url`` to each page_image doc's
+        metadata so that retrieval can sign and return HTTPS URLs.
+        Local ``page_image_path`` is preserved as a fallback.
+        """
+        if not self.page_image_storage:
+            return docs
+
+        for doc in docs:
+            if doc.meta_data.get("doc_type") != "page_image":
+                continue
+            local_path = doc.meta_data.get("page_image_path")
+            page_num = doc.meta_data.get("page_number")
+            if not local_path or page_num is None:
+                continue
+            doc_name = doc.name or ""
+            object_key = f"{doc_name}/page_{page_num}.png"
+            try:
+                url = self.page_image_storage.upload(local_path, object_key)
+                doc.meta_data["page_image_url"] = url
+                # base prefix ends with "/" so sliding-window can do f"{prefix}page_N.png"
+                doc.meta_data["pages_cache_url"] = url.rsplit("/", 1)[0] + "/"
+            except Exception as e:
+                log_warning(f"PageImageStorage.upload failed for {local_path}: {e}")
+
+        return docs
+
+    async def _async_upload_page_images(self, docs: List[Document]) -> List[Document]:
+        """Async version of ``_upload_page_images``."""
+        if not self.page_image_storage:
+            return docs
+
+        for doc in docs:
+            if doc.meta_data.get("doc_type") != "page_image":
+                continue
+            local_path = doc.meta_data.get("page_image_path")
+            page_num = doc.meta_data.get("page_number")
+            if not local_path or page_num is None:
+                continue
+            doc_name = doc.name or ""
+            object_key = f"{doc_name}/page_{page_num}.png"
+            try:
+                url = await self.page_image_storage.async_upload(local_path, object_key)
+                doc.meta_data["page_image_url"] = url
+                doc.meta_data["pages_cache_url"] = url.rsplit("/", 1)[0] + "/"
+            except Exception as e:
+                log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
+
+        return docs
+
+    def _resolve_page_image(self, doc: Document, page_num: int) -> Optional[str]:
+        """Resolve a page image reference for the given physical page number.
+
+        Returns a signed OSS URL when ``page_image_storage`` is configured,
+        or a local file path otherwise.  Returns ``None`` if the image cannot
+        be found.
         """
         from pathlib import Path
 
-        # Direct match: doc already stores the image path for this exact page
-        if doc.meta_data.get("page_number") == page_num and doc.meta_data.get("page_image_path"):
-            return doc.meta_data["page_image_path"]
+        storage = self.page_image_storage
 
-        # For adjacent pages (sliding window), look up the cache directory
+        # --- Direct match (this doc's own page) ---
+        if doc.meta_data.get("page_number") == page_num:
+            # 1. OSS: sign the stored URL
+            if storage:
+                url = doc.meta_data.get("page_image_url")
+                if url:
+                    try:
+                        return storage.sign_url(url, expires=3600)
+                    except Exception as e:
+                        log_warning(f"sign_url failed for {url}: {e}")
+            # 2. Local: return path if file still exists
+            path = doc.meta_data.get("page_image_path")
+            if path and Path(path).is_file():
+                return path
+
+        # --- Adjacent page (sliding window) ---
+        # 3. OSS: reconstruct URL from base prefix and sign it
+        if storage:
+            cache_url = doc.meta_data.get("pages_cache_url")
+            if cache_url:
+                adj_url = f"{cache_url}page_{page_num}.png"
+                try:
+                    return storage.sign_url(adj_url, expires=3600)
+                except Exception as e:
+                    log_warning(f"sign_url failed for {adj_url}: {e}")
+
+        # 4. Local: look up cache directory
         doc_name = doc.name or (doc.content_id or "").split("_page_")[0]
         if not doc_name:
             return None
@@ -3346,6 +3436,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         if cache_path.exists():
             return str(cache_path)
         return None
+
+    # Keep old name as an alias for backwards compatibility
+    def _resolve_page_image_path(self, doc: Document, page_num: int) -> Optional[str]:
+        return self._resolve_page_image(doc, page_num)
 
     def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
         """Collect page images for retrieved documents using a sliding window.
@@ -3364,9 +3458,29 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         seen: set = set()
         image_refs: List[tuple] = []  # (doc_id, page_num, image_path)
 
+        # Clamp config values to safe bounds
+        window = max(0, self.image_window_size)
+        max_images = max(1, self.max_retrieval_images)
+
         for doc in docs:
-            page_num = doc.meta_data.get("page_number")
-            total = doc.meta_data.get("total_pages", 9999)
+            # Safely coerce page_number to a positive int
+            raw_page = doc.meta_data.get("page_number")
+            try:
+                page_num: Optional[int] = int(raw_page) if raw_page is not None else None
+            except (TypeError, ValueError):
+                page_num = None
+            if page_num is not None and page_num <= 0:
+                page_num = None
+
+            # Safely coerce total_pages
+            raw_total = doc.meta_data.get("total_pages")
+            try:
+                total: int = int(raw_total) if raw_total is not None else 9999
+            except (TypeError, ValueError):
+                total = 9999
+            if total <= 0:
+                total = 9999
+
             doc_id = doc.content_id or doc.name or ""
 
             if doc.meta_data.get("doc_type") == "page_image":
@@ -3376,8 +3490,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 # Text chunk — sliding window
                 pages_to_add = list(
                     range(
-                        max(1, page_num - self.image_window_size),
-                        min(total, page_num + self.image_window_size) + 1,
+                        max(1, page_num - window),
+                        min(total, page_num + window) + 1,
                     )
                 )
             else:
@@ -3386,14 +3500,17 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             for p in pages_to_add:
                 key = (doc_id, p)
                 if key not in seen:
-                    img_path = self._resolve_page_image_path(doc, p)
-                    if img_path:
+                    resolved = self._resolve_page_image(doc, p)
+                    if resolved:
                         seen.add(key)
-                        image_refs.append((doc_id, p, img_path))
+                        image_refs.append((doc_id, p, resolved))
 
         # Sort by (doc_id, page_number) for consistent ordering
         image_refs.sort(key=lambda x: (x[0], x[1]))
-        return [Image(filepath=path) for _, _, path in image_refs[: self.max_retrieval_images]]
+        return [
+            Image(url=r) if r.startswith("http") else Image(filepath=r)
+            for _, _, r in image_refs[:max_images]
+        ]
 
     def _convert_documents_to_string(
         self,

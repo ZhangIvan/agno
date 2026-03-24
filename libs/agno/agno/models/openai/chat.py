@@ -379,6 +379,35 @@ class OpenAIChat(Model):
             message_dict["content"] = ""
         return message_dict
 
+    def _format_messages_list(self, messages: List[Message], compress_tool_results: bool = False) -> List[Dict]:
+        """Format a list of messages, injecting tool-image content as a subsequent user message.
+
+        The OpenAI Chat Completions API only supports multimodal content (images) in role='user'
+        messages. Images placed in role='tool' messages are silently ignored. This method strips
+        images from tool messages and appends a synthetic user message carrying those images.
+        """
+        result: List[Dict] = []
+        for m in messages:
+            formatted = self._format_message(m, compress_tool_results)
+            if m.role == "tool" and m.images:
+                # Strip image parts from the tool message (must stay text-only per API spec)
+                content = formatted.get("content")
+                if isinstance(content, list):
+                    text_parts = [p for p in content if p.get("type") not in ("image_url", "image")]
+                    if len(text_parts) == 1 and text_parts[0].get("type") == "text":
+                        formatted["content"] = text_parts[0]["text"]
+                    else:
+                        formatted["content"] = text_parts or ""
+                result.append(formatted)
+                # Inject images as a subsequent user message so the LLM can see them
+                if m.images:
+                    image_parts = images_to_message(images=m.images)
+                    if image_parts:
+                        result.append({"role": "user", "content": image_parts})
+            else:
+                result.append(formatted)
+        return result
+
     def invoke(
         self,
         messages: List[Message],
@@ -408,7 +437,7 @@ class OpenAIChat(Model):
 
             provider_response = self.get_client().chat.completions.create(
                 model=self.id,
-                messages=[self._format_message(m, compress_tool_results) for m in messages],  # type: ignore
+                messages=self._format_messages_list(messages, compress_tool_results),  # type: ignore
                 **self.get_request_params(
                     response_format=response_format, tools=tools, tool_choice=tool_choice, run_response=run_response
                 ),
@@ -489,7 +518,7 @@ class OpenAIChat(Model):
             assistant_message.metrics.start_timer()
             response = await self.get_async_client().chat.completions.create(
                 model=self.id,
-                messages=[self._format_message(m, compress_tool_results) for m in messages],  # type: ignore
+                messages=self._format_messages_list(messages, compress_tool_results),  # type: ignore
                 **self.get_request_params(
                     response_format=response_format, tools=tools, tool_choice=tool_choice, run_response=run_response
                 ),
@@ -568,7 +597,7 @@ class OpenAIChat(Model):
 
             for chunk in self.get_client().chat.completions.create(
                 model=self.id,
-                messages=[self._format_message(m, compress_tool_results) for m in messages],  # type: ignore
+                messages=self._format_messages_list(messages, compress_tool_results),  # type: ignore
                 stream=True,
                 stream_options={"include_usage": True},
                 **self.get_request_params(
@@ -646,7 +675,7 @@ class OpenAIChat(Model):
 
             async_stream = await self.get_async_client().chat.completions.create(
                 model=self.id,
-                messages=[self._format_message(m, compress_tool_results) for m in messages],  # type: ignore
+                messages=self._format_messages_list(messages, compress_tool_results),  # type: ignore
                 stream=True,
                 stream_options={"include_usage": True},
                 **self.get_request_params(

@@ -13,21 +13,27 @@ def get_default_pages_cache_dir() -> Path:
     return cache_dir
 
 
-def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150) -> Dict[int, str]:
+def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: bool = True) -> Dict[int, str]:
     """Render each page of a PDF to a PNG image.
 
     Args:
         pdf_path: Path to the PDF file.
         output_dir: Directory to save page images.
         dpi: Resolution for rendering (default 150).
+        optimize: If True, apply PNG optimization to reduce file size (default True).
 
     Returns:
         Dict mapping 1-based page number to image file path.
     """
     try:
         import fitz  # pymupdf
-    except ImportError:
-        raise ImportError("`pymupdf` not installed. Please install it via `pip install pymupdf`.")
+        from PIL import Image
+    except ImportError as e:
+        if "fitz" in str(e):
+            raise ImportError("`pymupdf` not installed. Please install it via `pip install pymupdf`.")
+        if "PIL" in str(e):
+            raise ImportError("`Pillow` not installed. Please install it via `pip install Pillow`.")
+        raise
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -41,9 +47,27 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150) -> Dict[in
             pix = page.get_pixmap(matrix=matrix)
             page_number = page_index + 1
             image_path = str(output_path / f"page_{page_number}.png")
-            pix.save(image_path)
+
+            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+            if optimize:
+                # # 当前默认（推荐）
+                # dpi=150, optimize=True  # 平衡质量和体积
+                # # 高质量需求
+                # dpi=200, optimize=True  # 更清晰，文件稍大
+                # # 极致压缩（可接受轻微损失）
+                # dpi=150, optimize="aggressive"  # 需要额外 quantize 处理
+                img.save(
+                    image_path,
+                    "PNG",
+                    optimize=True,
+                    compress_level=6,
+                )
+            else:
+                img.save(image_path, "PNG")
+
             page_images[page_number] = image_path
-            log_debug(f"Captured page {page_number} → {image_path}")
+            log_debug(f"Captured page {page_number} → {image_path} ({pix.width}x{pix.height})")
         doc.close()
     except Exception as e:
         log_error(f"Error capturing PDF pages from {pdf_path}: {e}")

@@ -51,6 +51,7 @@ class PPTXReader(Reader):
 
     def read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         """Read a pptx file and return a list of documents (one per slide)."""
+        _tmp_capture_path: Optional[str] = None
         try:
             file_path: Optional[str] = None
             if isinstance(file, Path):
@@ -64,6 +65,17 @@ class PPTXReader(Reader):
                 log_debug(f"Reading uploaded file: {getattr(file, 'name', 'BytesIO')}")
                 presentation = Presentation(file)
                 doc_name = name or getattr(file, "name", "pptx_file").split(".")[0]
+                if self.capture_pages:
+                    import os, shutil, tempfile
+                    if hasattr(file, "seek"):
+                        file.seek(0)
+                    _tmp = tempfile.NamedTemporaryFile(suffix=".pptx", delete=False)
+                    shutil.copyfileobj(file, _tmp)
+                    _tmp.close()
+                    if hasattr(file, "seek"):
+                        file.seek(0)
+                    file_path = _tmp.name
+                    _tmp_capture_path = _tmp.name
 
             total_slides = len(presentation.slides)
 
@@ -77,65 +89,75 @@ class PPTXReader(Reader):
                 except Exception as e:
                     log_warning(f"Failed to capture PPTX slide images: {e}")
 
-            # Build one Document per slide
-            documents: List[Document] = []
-            for slide_number, slide in enumerate(presentation.slides, 1):
-                text_content = []
-                for shape in slide.shapes:
-                    if hasattr(shape, "text") and shape.text.strip():
-                        text_content.append(shape.text.strip())
-
-                slide_text = f"Slide {slide_number}:\n"
-                slide_text += "\n".join(text_content) if text_content else "(No text content)"
-
-                meta: dict = {
-                    "page_number": slide_number,
-                    "total_pages": total_slides,
-                    "doc_type": "text_chunk",
-                }
-                if page_images and slide_number in page_images:
-                    meta["page_image_path"] = page_images[slide_number]
-
-                documents.append(
-                    Document(
-                        name=doc_name,
-                        id=str(uuid4()),
-                        meta_data=meta,
-                        content=slide_text,
-                    )
-                )
-
-            if self.chunk:
-                chunked_documents = []
-                for document in documents:
-                    chunked_documents.extend(self.chunk_document(document))
-                result = chunked_documents
-            else:
-                result = documents
-
-            # Append image documents for multimodal embedding
+            # When page images were captured, use image-only mode:
+            # slides are visual artefacts — text extraction is skipped and only
+            # page_image documents are produced for multimodal embedding.
+            # Fallback to text extraction when capture was unavailable (e.g. no LibreOffice).
             if page_images:
+                result: List[Document] = []
                 for slide_num, image_path in page_images.items():
+                    img_meta: dict = {
+                        "doc_type": "page_image",
+                        "page_number": slide_num,
+                        "total_pages": total_slides,
+                        "page_image_path": image_path,
+                    }
+                    if cache_dir:  # type: ignore[possibly-undefined]
+                        img_meta["pages_cache_dir"] = cache_dir
                     result.append(
                         Document(
                             name=doc_name,
                             id=f"{doc_name}_img_{slide_num}",
                             content="",
-                            meta_data={
-                                "doc_type": "page_image",
-                                "page_number": slide_num,
-                                "total_pages": total_slides,
-                                "page_image_path": image_path,
-                            },
+                            meta_data=img_meta,
                             content_id=f"{doc_name}_page_{slide_num}",
                         )
                     )
+            else:
+                # Text-only fallback (LibreOffice unavailable)
+                documents: List[Document] = []
+                for slide_number, slide in enumerate(presentation.slides, 1):
+                    text_content = []
+                    for shape in slide.shapes:
+                        if hasattr(shape, "text") and shape.text.strip():
+                            text_content.append(shape.text.strip())
+
+                    slide_text = f"Slide {slide_number}:\n"
+                    slide_text += "\n".join(text_content) if text_content else "(No text content)"
+
+                    documents.append(
+                        Document(
+                            name=doc_name,
+                            id=str(uuid4()),
+                            meta_data={
+                                "page_number": slide_number,
+                                "total_pages": total_slides,
+                                "doc_type": "text_chunk",
+                            },
+                            content=slide_text,
+                        )
+                    )
+
+                if self.chunk:
+                    chunked_documents = []
+                    for document in documents:
+                        chunked_documents.extend(self.chunk_document(document))
+                    result = chunked_documents
+                else:
+                    result = documents
 
             return result
 
         except Exception as e:
             log_error(f"Error reading file: {e}")
             raise ValueError(f"Error reading file: {e}")
+        finally:
+            if _tmp_capture_path:
+                try:
+                    import os
+                    os.unlink(_tmp_capture_path)
+                except OSError:
+                    pass
 
     async def async_read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         """Asynchronously read a pptx file and return a list of documents"""

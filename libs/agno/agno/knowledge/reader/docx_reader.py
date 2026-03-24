@@ -52,6 +52,7 @@ class DocxReader(Reader):
 
     def read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         """Read a docx file and return a list of documents"""
+        _tmp_capture_path: Optional[str] = None
         try:
             file_path: Optional[str] = None
             if isinstance(file, Path):
@@ -65,6 +66,17 @@ class DocxReader(Reader):
                 log_debug(f"Reading uploaded file: {getattr(file, 'name', 'BytesIO')}")
                 docx_document = DocxDocument(file)
                 doc_name = name or getattr(file, "name", "docx_file").split(".")[0]
+                if self.capture_pages:
+                    import os, shutil, tempfile
+                    if hasattr(file, "seek"):
+                        file.seek(0)
+                    _tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+                    shutil.copyfileobj(file, _tmp)
+                    _tmp.close()
+                    if hasattr(file, "seek"):
+                        file.seek(0)
+                    file_path = _tmp.name
+                    _tmp_capture_path = _tmp.name
 
             doc_content = "\n\n".join([para.text for para in docx_document.paragraphs])
 
@@ -124,6 +136,13 @@ class DocxReader(Reader):
         except Exception as e:
             log_error(f"Error reading file: {e}")
             raise ValueError(f"Error reading file: {e}")
+        finally:
+            if _tmp_capture_path:
+                try:
+                    import os
+                    os.unlink(_tmp_capture_path)
+                except OSError:
+                    pass
 
     async def async_read(self, file: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:
         """Asynchronously read a docx file and return a list of documents"""

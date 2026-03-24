@@ -121,7 +121,7 @@ def create_knowledge_search_tool(
         if agent.references_format == "json":
             import json
 
-            return json.dumps(docs, indent=2, default=str)
+            return json.dumps(docs, indent=2, default=str, ensure_ascii=False)
         else:
             import yaml
 
@@ -235,6 +235,27 @@ def create_knowledge_search_tool(
             try:
                 from agno.agent import _messages
 
+                # When use_page_images is enabled, retrieve Document objects directly
+                # so we can attach page images to the tool result for the LLM
+                resolved_knowledge = _messages._get_resolved_knowledge(agent, run_context)
+                if (
+                    resolved_knowledge is not None
+                    and getattr(resolved_knowledge, "use_page_images", False)
+                    and agent.knowledge_retriever is None
+                ):
+                    raw_docs = resolved_knowledge.search(query=query, filters=knowledge_filters)
+                    retrieval_timer.stop()
+                    if raw_docs:
+                        _track_references([d.to_dict() for d in raw_docs], query, retrieval_timer.elapsed)
+                        images = resolved_knowledge._get_page_images_for_docs(raw_docs)
+                        if images:
+                            from agno.tools.function import ToolResult
+                            return ToolResult(
+                                content=_format_results([d.to_dict() for d in raw_docs]),
+                                images=images,
+                            )
+                    return _format_results([d.to_dict() for d in raw_docs] if raw_docs else None)
+
                 docs = _messages.get_relevant_docs_from_knowledge(
                     agent,
                     query=query,
@@ -262,6 +283,26 @@ def create_knowledge_search_tool(
             retrieval_timer.start()
             try:
                 from agno.agent import _messages
+
+                # When use_page_images is enabled, retrieve Document objects directly
+                resolved_knowledge = _messages._get_resolved_knowledge(agent, run_context)
+                if (
+                    resolved_knowledge is not None
+                    and getattr(resolved_knowledge, "use_page_images", False)
+                    and agent.knowledge_retriever is None
+                ):
+                    raw_docs = await resolved_knowledge.asearch(query=query, filters=knowledge_filters)
+                    retrieval_timer.stop()
+                    if raw_docs:
+                        _track_references([d.to_dict() for d in raw_docs], query, retrieval_timer.elapsed)
+                        images = resolved_knowledge._get_page_images_for_docs(raw_docs)
+                        if images:
+                            from agno.tools.function import ToolResult
+                            return ToolResult(
+                                content=_format_results([d.to_dict() for d in raw_docs]),
+                                images=images,
+                            )
+                    return _format_results([d.to_dict() for d in raw_docs] if raw_docs else None)
 
                 docs = await _messages.aget_relevant_docs_from_knowledge(
                     agent,
