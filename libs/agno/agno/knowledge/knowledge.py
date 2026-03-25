@@ -1,4 +1,3 @@
-import logging
 import asyncio
 import hashlib
 import io
@@ -1236,7 +1235,9 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader
         elif uri_lower.endswith(".xlsx") or uri_lower.endswith(".xls"):
             return self.excel_reader
-        elif any(uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]):
+        elif any(
+            uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]
+        ):
             return self.image_reader
         else:
             return self.text_reader
@@ -3428,7 +3429,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         return docs, local_paths
 
     async def _async_upload_page_images(self, docs: List[Document]) -> Tuple[List[Document], List[str]]:
-        """Async version of ``_upload_page_images``."""
+        """Async version of ``_upload_page_images`` with concurrent uploads."""
         import os
 
         if not self.page_image_storage:
@@ -3437,30 +3438,67 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         page_url_map: Dict[int, str] = {}
         local_paths: List[str] = []
 
-        # Phase 1: upload any doc that carries a page_image_path and build url map.
-        for doc in docs:
+        # Collect upload tasks with their metadata
+        upload_tasks = []
+        doc_index_map = {}  # Map task index to doc and metadata
+
+        for idx, doc in enumerate(docs):
             local_path = doc.meta_data.get("page_image_path")
             if not local_path:
                 continue
             page_num = doc.meta_data.get("page_number")
             if page_num is None:
                 continue
+
             is_cache_file = "pages_cache_dir" in doc.meta_data
             content_id = doc.content_id or doc.name or ""
             img_suffix = os.path.splitext(local_path)[1] or ".webp"
             object_key = f"{content_id}/page_{page_num}{img_suffix}"
-            try:
-                url = await self.page_image_storage.async_upload(local_path, object_key)
-                doc.meta_data["page_image_url"] = url
-                doc.local_embed_path = local_path
-                doc.meta_data.pop("page_image_path", None)
-                doc.meta_data.pop("pages_cache_dir", None)
-                doc.meta_data.pop("pages_cache_url", None)
-                page_url_map[page_num] = url
-                if is_cache_file:
-                    local_paths.append(local_path)
-            except Exception as e:
-                log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
+
+            task_idx = len(upload_tasks)
+            doc_index_map[task_idx] = {
+                "doc_idx": idx,
+                "local_path": local_path,
+                "page_num": page_num,
+                "is_cache_file": is_cache_file,
+            }
+            upload_tasks.append(self.page_image_storage.async_upload(local_path, object_key))
+
+        if not upload_tasks:
+            # Phase 2: propagate url info to text_chunk docs with matching page_number
+            return docs, local_paths
+
+        # Execute uploads concurrently with semaphore for rate limiting
+        max_concurrent = 10
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def upload_with_semaphore(task):
+            async with semaphore:
+                return await task
+
+        results = await asyncio.gather(*[upload_with_semaphore(task) for task in upload_tasks], return_exceptions=True)
+
+        # Process results
+        for task_idx, result in enumerate(results):
+            meta = doc_index_map[task_idx]
+            doc = docs[meta["doc_idx"]]
+            local_path = meta["local_path"]
+            page_num = meta["page_num"]
+            is_cache_file = meta["is_cache_file"]
+
+            if isinstance(result, Exception):
+                log_warning(f"PageImageStorage.async_upload failed for {local_path}: {result}")
+                continue
+
+            url = result
+            doc.meta_data["page_image_url"] = url
+            doc.local_embed_path = local_path
+            doc.meta_data.pop("page_image_path", None)
+            doc.meta_data.pop("pages_cache_dir", None)
+            doc.meta_data.pop("pages_cache_url", None)
+            page_url_map[page_num] = url
+            if is_cache_file:
+                local_paths.append(local_path)
 
         # Phase 2: propagate url info to text_chunk docs with matching page_number
         if page_url_map:
@@ -3501,6 +3539,71 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
         for doc in docs:
             doc.local_embed_path = None
+
+    def _cleanup_old_cache(self, cache_dir: str, max_age_days: int = 7, max_cache_size_mb: int = 500) -> None:
+        """Clean up old cache files based on age and total size.
+
+        This method removes:
+        1. Files older than max_age_days
+        2. Oldest files if total cache size exceeds max_cache_size_mb
+
+        Args:
+            cache_dir: Path to the cache directory to clean.
+            max_age_days: Maximum age of files in days (default 7).
+            max_cache_size_mb: Maximum total cache size in MB (default 500).
+        """
+        import time
+
+        from pathlib import Path
+
+        cache_path = Path(cache_dir)
+        if not cache_path.exists():
+            return
+
+        current_time = time.time()
+        max_age_seconds = max_age_days * 24 * 60 * 60
+        max_size_bytes = max_cache_size_mb * 1024 * 1024
+
+        # Collect all files with their stats
+        files_with_stats = []
+        total_size = 0
+
+        for file_path in cache_path.rglob("*"):
+            if file_path.is_file():
+                try:
+                    stat = file_path.stat()
+                    files_with_stats.append((file_path, stat.st_mtime, stat.st_size))
+                    total_size += stat.st_size
+                except OSError:
+                    continue
+
+        # Remove files older than max_age_days
+        for file_path, mtime, size in files_with_stats:
+            if current_time - mtime > max_age_seconds:
+                try:
+                    file_path.unlink()
+                    total_size -= size
+                    log_debug(f"Removed old cache file: {file_path}")
+                except OSError as e:
+                    log_warning(f"Could not remove old cache file {file_path}: {e}")
+
+        # If still over size limit, remove oldest files
+        if total_size > max_size_bytes:
+            # Sort by modification time (oldest first)
+            remaining_files = sorted(
+                [(f, m, s) for f, m, s in files_with_stats if f.exists()],
+                key=lambda x: x[1],
+            )
+
+            for file_path, mtime, size in remaining_files:
+                if total_size <= max_size_bytes:
+                    break
+                try:
+                    file_path.unlink()
+                    total_size -= size
+                    log_debug(f"Removed cache file to reduce size: {file_path}")
+                except OSError as e:
+                    log_warning(f"Could not remove cache file {file_path}: {e}")
 
     # Local-path fields that must never appear in returned references
     _LOCAL_META_FIELDS = ("page_image_path", "pages_cache_dir", "pages_cache_url")
@@ -3774,10 +3877,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
         # Sort by (doc_id, page_number) for consistent ordering
         # image_refs.sort(key=lambda x: (x[0], x[1]))
-        return [
-            Image(url=r) if r.startswith("http") else Image(filepath=r)
-            for _, _, r in image_refs[:max_images]
-        ]
+        return [Image(url=r) if r.startswith("http") else Image(filepath=r) for _, _, r in image_refs[:max_images]]
 
     def _convert_documents_to_string(
         self,

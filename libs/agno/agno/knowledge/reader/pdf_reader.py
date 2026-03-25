@@ -275,10 +275,13 @@ class BasePDFReader(Reader):
             try:
                 decrypted_pdf = doc_reader.decrypt(pwd)
                 if decrypted_pdf:
-                    log_debug(f'Successfully decrypted PDF file "{doc_name}"' + (f' with password' if pwd else ' with empty password'))
+                    log_debug(
+                        f'Successfully decrypted PDF file "{doc_name}"'
+                        + (" with password" if pwd else " with empty password")
+                    )
                     return True
             except Exception as e:
-                log_debug(f'Decrypt attempt with {"empty password" if not pwd else "provided password"} failed: {e}')
+                log_debug(f"Decrypt attempt with {'empty password' if not pwd else 'provided password'} failed: {e}")
                 continue
 
         # All attempts failed
@@ -405,14 +408,19 @@ class BasePDFReader(Reader):
         if self.capture_pages and pdf_path:
             try:
                 from agno.knowledge.reader.page_capture import capture_pdf_pages, get_page_cache_dir
+
                 resolved_cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
                 page_images = capture_pdf_pages(pdf_path, resolved_cache_dir, dpi=self.image_dpi)
             except Exception as e:
                 log_warning(f"Failed to capture PDF page images: {e}", exc_info=True)
 
         return self._create_documents(
-            pdf_content, doc_name, use_uuid_for_id, shift,
-            page_images=page_images, pages_cache_dir=resolved_cache_dir,
+            pdf_content,
+            doc_name,
+            use_uuid_for_id,
+            shift,
+            page_images=page_images,
+            pages_cache_dir=resolved_cache_dir,
         )
 
     async def _async_pdf_reader_to_documents(
@@ -434,8 +442,8 @@ class BasePDFReader(Reader):
                     # 尝试使用更宽松的文本提取参数
                     try:
                         # 有些版本的pypdf支持不同的参数
-                        page_text = page.extract_text(kwargs={'space_width': 1.0})
-                    except:
+                        page_text = page.extract_text(kwargs={"space_width": 1.0})
+                    except Exception:
                         page_text = ""
                 else:
                     raise
@@ -475,16 +483,19 @@ class BasePDFReader(Reader):
         if self.capture_pages and pdf_path:
             try:
                 from agno.knowledge.reader.page_capture import capture_pdf_pages, get_page_cache_dir
+
                 resolved_cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
-                page_images = await asyncio.to_thread(
-                    capture_pdf_pages, pdf_path, resolved_cache_dir, self.image_dpi
-                )
+                page_images = await asyncio.to_thread(capture_pdf_pages, pdf_path, resolved_cache_dir, self.image_dpi)
             except Exception as e:
                 log_warning(f"Failed to capture PDF page images: {e}", exc_info=True)
 
         return self._create_documents(
-            pdf_content_clean, doc_name, use_uuid_for_id, shift,
-            page_images=page_images, pages_cache_dir=resolved_cache_dir,
+            pdf_content_clean,
+            doc_name,
+            use_uuid_for_id,
+            shift,
+            page_images=page_images,
+            pages_cache_dir=resolved_cache_dir,
         )
 
 
@@ -523,7 +534,10 @@ class PDFReader(BasePDFReader):
         if isinstance(pdf, (str, Path)):
             resolved_path: Optional[str] = str(pdf)
         elif self.capture_pages:
-            import os, shutil, tempfile
+            import os
+            import shutil
+            import tempfile
+
             if hasattr(pdf, "seek"):
                 pdf.seek(0)
             _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -543,6 +557,7 @@ class PDFReader(BasePDFReader):
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass
@@ -574,7 +589,10 @@ class PDFReader(BasePDFReader):
         if isinstance(pdf, (str, Path)):
             resolved_path: Optional[str] = str(pdf)
         elif self.capture_pages:
-            import os, shutil, tempfile
+            import os
+            import shutil
+            import tempfile
+
             if hasattr(pdf, "seek"):
                 pdf.seek(0)
             _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -589,11 +607,14 @@ class PDFReader(BasePDFReader):
 
         # Read and chunk.
         try:
-            return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path)
+            return await self._async_pdf_reader_to_documents(
+                pdf_reader, doc_name, use_uuid_for_id=True, pdf_path=resolved_path
+            )
         finally:
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass
@@ -624,7 +645,10 @@ class PDFImageReader(BasePDFReader):
         if isinstance(pdf, (str, Path)):
             resolved_path: Optional[str] = str(pdf)
         elif self.capture_pages:
-            import os, shutil, tempfile
+            import os
+            import shutil
+            import tempfile
+
             if hasattr(pdf, "seek"):
                 pdf.seek(0)
             _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -639,11 +663,14 @@ class PDFImageReader(BasePDFReader):
 
         # Read and chunk.
         try:
-            return self._pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
+            return self._pdf_reader_to_documents(
+                pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path
+            )
         finally:
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass
@@ -671,7 +698,10 @@ class PDFImageReader(BasePDFReader):
         if isinstance(pdf, (str, Path)):
             resolved_path: Optional[str] = str(pdf)
         elif self.capture_pages:
-            import os, shutil, tempfile
+            import os
+            import shutil
+            import tempfile
+
             if hasattr(pdf, "seek"):
                 pdf.seek(0)
             _tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -686,11 +716,14 @@ class PDFImageReader(BasePDFReader):
 
         # Read and chunk.
         try:
-            return await self._async_pdf_reader_to_documents(pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path)
+            return await self._async_pdf_reader_to_documents(
+                pdf_reader, doc_name, read_images=True, use_uuid_for_id=True, pdf_path=resolved_path
+            )
         finally:
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass

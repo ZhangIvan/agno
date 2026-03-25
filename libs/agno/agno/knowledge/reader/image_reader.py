@@ -6,6 +6,7 @@ from typing import IO, Any, List, Optional, Union
 from agno.knowledge.document.base import Document
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.types import ContentType
+from agno.knowledge.utils.image_config import DEFAULT_IMAGE_CONFIG, ImageProcessingConfig
 from agno.utils.log import log_debug, log_warning
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
@@ -25,9 +26,11 @@ class ImageReader(Reader):
     def __init__(
         self,
         pages_cache_dir: Optional[str] = None,
+        image_config: Optional[ImageProcessingConfig] = None,
         **kwargs,
     ):
         self.pages_cache_dir = pages_cache_dir or os.getenv("AGNO_PAGE_CACHE_DIR")
+        self.image_config = image_config or DEFAULT_IMAGE_CONFIG
         # Images are not text-chunkable; disable chunking by default.
         kwargs.setdefault("chunking_strategy", None)
         super().__init__(**kwargs)
@@ -47,7 +50,12 @@ class ImageReader(Reader):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _to_webp(self, src: Union[str, IO[Any]], doc_name: str, webp_quality: int = 82) -> tuple:
+    def _to_webp(
+        self,
+        src: Union[str, IO[Any]],
+        doc_name: str,
+        webp_quality: Optional[int] = None,
+    ) -> tuple:
         """Convert *src* image to WebP and save it in the per-document page-cache dir.
 
         WebP is 5-10x smaller than PNG and supported by all major vision APIs.
@@ -72,10 +80,14 @@ class ImageReader(Reader):
             if hasattr(src, "seek"):
                 src.seek(0)
 
+        quality = webp_quality if webp_quality is not None else self.image_config.webp_quality
         img.save(
-            cache_path, "WEBP", quality=webp_quality, method=4,
-            lossless=False,  # 有损 = 体积暴减
-            optimize=True  # 额外优化文件大小
+            cache_path,
+            "WEBP",
+            quality=quality,
+            method=self.image_config.webp_method,
+            lossless=self.image_config.lossless,
+            optimize=self.image_config.optimize,
         )
         return cache_path, cache_dir
 

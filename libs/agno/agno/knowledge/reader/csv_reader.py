@@ -100,13 +100,17 @@ class CSVReader(Reader):
                     # Normalize line endings in CSV cells to preserve row integrity
                     csv_lines.append(", ".join(stringify_cell_value(cell) for cell in row))
 
-            documents = [
-                Document(
-                    name=csv_name,
-                    id=str(uuid4()),
-                    content="\n".join(csv_lines),
-                )
-            ] if csv_lines else []
+            documents = (
+                [
+                    Document(
+                        name=csv_name,
+                        id=str(uuid4()),
+                        content="\n".join(csv_lines),
+                    )
+                ]
+                if csv_lines
+                else []
+            )
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -170,13 +174,17 @@ class CSVReader(Reader):
             if total_rows <= 10:
                 # Small files: single document
                 csv_content = " ".join(", ".join(stringify_cell_value(cell) for cell in row) for row in rows)
-                documents = [
-                    Document(
-                        name=csv_name,
-                        id=str(uuid4()),
-                        content=csv_content,
-                    )
-                ] if csv_content else []
+                documents = (
+                    [
+                        Document(
+                            name=csv_name,
+                            id=str(uuid4()),
+                            content=csv_content,
+                        )
+                    ]
+                    if csv_content
+                    else []
+                )
             else:
                 # Large files: paginate and process in parallel
                 pages = []
@@ -214,4 +222,3 @@ class CSVReader(Reader):
             file_desc = getattr(file, "name", str(file)) if isinstance(file, IO) else file
             log_error(f"Error reading {file_desc}: {e}")
             raise ValueError(f"Error reading {file_desc}: {e}")
-

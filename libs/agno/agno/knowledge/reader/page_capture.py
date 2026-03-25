@@ -3,7 +3,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 
-from agno.utils.log import log_debug, log_error, log_warning
+from agno.knowledge.utils.image_config import DEFAULT_IMAGE_CONFIG, ImageProcessingConfig
+from agno.utils.log import log_debug, log_error
 
 
 def get_default_pages_cache_dir() -> Path:
@@ -13,18 +14,28 @@ def get_default_pages_cache_dir() -> Path:
     return cache_dir
 
 
-def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: bool = True) -> Dict[int, str]:
-    """Render each page of a PDF to a PNG image.
+def capture_pdf_pages(
+    pdf_path: str,
+    output_dir: str,
+    dpi: Optional[int] = None,
+    optimize: bool = True,
+    config: Optional[ImageProcessingConfig] = None,
+) -> Dict[int, str]:
+    """Render each page of a PDF to a WebP image.
 
     Args:
         pdf_path: Path to the PDF file.
         output_dir: Directory to save page images.
-        dpi: Resolution for rendering (default 150).
-        optimize: If True, apply PNG optimization to reduce file size (default True).
+        dpi: Resolution for rendering. If None, uses config.image_dpi (default 150).
+        optimize: If True, apply WebP optimization to reduce file size (default True).
+        config: ImageProcessingConfig instance. If None, uses DEFAULT_IMAGE_CONFIG.
 
     Returns:
         Dict mapping 1-based page number to image file path.
     """
+    cfg = config or DEFAULT_IMAGE_CONFIG
+    effective_dpi = dpi if dpi is not None else cfg.image_dpi
+
     try:
         import fitz  # pymupdf
         from PIL import Image
@@ -41,45 +52,25 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
     page_images: Dict[int, str] = {}
     try:
         doc = fitz.open(pdf_path)
-        matrix = fitz.Matrix(dpi / 72, dpi / 72)
+        matrix = fitz.Matrix(effective_dpi / 72, effective_dpi / 72)
         for page_index in range(len(doc)):
             page = doc[page_index]
             pix = page.get_pixmap(matrix=matrix)
             page_number = page_index + 1
-            # image_path = str(output_path / f"page_{page_number}.png")
-            # 直接保存为 WebP（OpenAI 完美支持）
             image_path = str(output_path / f"page_{page_number}.webp")
 
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
             if optimize:
-                # # 转换为 P 模式（调色板），减少颜色数量
-                # img = img.quantize(colors=256)
-                # # # 当前默认（推荐）
-                # # dpi=150, optimize=True  # 平衡质量和体积
-                # # # 高质量需求
-                # # dpi=200, optimize=True  # 更清晰，文件稍大
-                # # # 极致压缩（可接受轻微损失）
-                # # dpi=150, optimize="aggressive"  # 需要额外 quantize 处理
-                # img.save(
-                #     image_path,
-                #     "PNG",
-                #     optimize=True,
-                #     compress_level=9,
-                # )
-                # ==============================================
-                # OpenAI 专用最优压缩参数（体积小 + 识别率 100%）
-                # ==============================================
                 img.save(
                     image_path,
                     "WebP",
-                    quality=82,  # 质量 85 最均衡（文档足够清晰）
-                    lossless=False,  # 有损 = 体积暴减
-                    method=4,  # 压缩速度与效果平衡
-                    optimize=True  # 额外优化文件大小
+                    quality=cfg.webp_quality,
+                    lossless=cfg.lossless,
+                    method=cfg.webp_method,
+                    optimize=cfg.optimize,
                 )
             else:
-                # img.save(image_path, "PNG")
                 img.save(image_path, "WebP", quality=85)
             page_images[page_number] = image_path
             log_debug(f"Captured page {page_number} → {image_path} ({pix.width}x{pix.height})")
@@ -144,13 +135,19 @@ def _convert_to_pdf_libreoffice(input_path: str, output_dir: str) -> str:
     return str(pdf_output)
 
 
-def capture_pptx_slides(pptx_path: str, output_dir: str, dpi: int = 150) -> Dict[int, str]:
-    """Render each slide of a PPTX to a PNG image via LibreOffice→PDF→pymupdf.
+def capture_pptx_slides(
+    pptx_path: str,
+    output_dir: str,
+    dpi: Optional[int] = None,
+    config: Optional[ImageProcessingConfig] = None,
+) -> Dict[int, str]:
+    """Render each slide of a PPTX to a WebP image via LibreOffice→PDF→pymupdf.
 
     Args:
         pptx_path: Path to the PPTX file.
         output_dir: Directory to save slide images.
-        dpi: Resolution for rendering (default 150).
+        dpi: Resolution for rendering. If None, uses config.image_dpi (default 150).
+        config: ImageProcessingConfig instance. If None, uses DEFAULT_IMAGE_CONFIG.
 
     Returns:
         Dict mapping 1-based slide number to image file path.
@@ -160,16 +157,22 @@ def capture_pptx_slides(pptx_path: str, output_dir: str, dpi: int = 150) -> Dict
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = _convert_to_pdf_libreoffice(pptx_path, tmp_dir)
-        return capture_pdf_pages(pdf_path, output_dir, dpi=dpi)
+        return capture_pdf_pages(pdf_path, output_dir, dpi=dpi, config=config)
 
 
-def capture_docx_pages(docx_path: str, output_dir: str, dpi: int = 150) -> Dict[int, str]:
-    """Render each page of a DOCX to a PNG image via LibreOffice→PDF→pymupdf.
+def capture_docx_pages(
+    docx_path: str,
+    output_dir: str,
+    dpi: Optional[int] = None,
+    config: Optional[ImageProcessingConfig] = None,
+) -> Dict[int, str]:
+    """Render each page of a DOCX to a WebP image via LibreOffice→PDF→pymupdf.
 
     Args:
         docx_path: Path to the DOCX file.
         output_dir: Directory to save page images.
-        dpi: Resolution for rendering (default 150).
+        dpi: Resolution for rendering. If None, uses config.image_dpi (default 150).
+        config: ImageProcessingConfig instance. If None, uses DEFAULT_IMAGE_CONFIG.
 
     Returns:
         Dict mapping 1-based page number to image file path.
@@ -179,7 +182,7 @@ def capture_docx_pages(docx_path: str, output_dir: str, dpi: int = 150) -> Dict[
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         pdf_path = _convert_to_pdf_libreoffice(docx_path, tmp_dir)
-        return capture_pdf_pages(pdf_path, output_dir, dpi=dpi)
+        return capture_pdf_pages(pdf_path, output_dir, dpi=dpi, config=config)
 
 
 def get_page_cache_dir(base_dir: Optional[str], doc_name: str) -> str:
@@ -198,3 +201,44 @@ def get_page_cache_dir(base_dir: Optional[str], doc_name: str) -> str:
         cache = get_default_pages_cache_dir() / doc_name
     cache.mkdir(parents=True, exist_ok=True)
     return str(cache)
+
+
+def convert_to_webp(
+    image_source: str,
+    output_path: str,
+    config: Optional[ImageProcessingConfig] = None,
+) -> str:
+    """Convert an image file to WebP format.
+
+    This is a unified function for WebP conversion used by various readers.
+
+    Args:
+        image_source: Path to the source image file.
+        output_path: Path where the WebP image will be saved.
+        config: ImageProcessingConfig instance. If None, uses DEFAULT_IMAGE_CONFIG.
+
+    Returns:
+        Path to the output WebP file.
+
+    Raises:
+        ImportError: If Pillow is not installed.
+        IOError: If the source image cannot be read or output cannot be written.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        raise ImportError("`Pillow` not installed. Please install it via `pip install Pillow`.")
+
+    cfg = config or DEFAULT_IMAGE_CONFIG
+
+    img = Image.open(image_source).convert("RGB")
+    img.save(
+        output_path,
+        "WebP",
+        quality=cfg.webp_quality,
+        method=cfg.webp_method,
+        lossless=cfg.lossless,
+        optimize=cfg.optimize,
+    )
+
+    return output_path

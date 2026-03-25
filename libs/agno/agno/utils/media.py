@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import time
 from enum import Enum
@@ -7,6 +8,7 @@ from typing import List, Optional
 import httpx
 
 from agno.media import Audio, File, Image, Video
+from agno.utils.http import get_default_async_client
 from agno.utils.log import log_info, log_warning
 
 
@@ -371,3 +373,208 @@ def reconstruct_response_audio(audio: Optional[dict]) -> Optional[Audio]:
     if not audio:
         return None
     return reconstruct_audio_from_dict(audio)
+
+
+# ==============================================================================
+# Async Download Functions
+# ==============================================================================
+
+
+async def async_download_image(url: str, output_path: str, timeout: int = 30, max_retries: int = 3) -> bool:
+    """Asynchronously download an image from URL and save to local path.
+
+    Args:
+        url: URL of the image to download.
+        output_path: Local filesystem path to save the image.
+        timeout: Request timeout in seconds (default 30).
+        max_retries: Number of retry attempts on failure (default 3).
+
+    Returns:
+        True if download succeeded, False otherwise.
+    """
+    client = get_default_async_client()
+    backoff = 1.0
+
+    for attempt in range(max_retries):
+        try:
+            async with asyncio.timeout(timeout):
+                response = await client.get(url)
+                response.raise_for_status()
+
+                content_type = response.headers.get("Content-Type")
+                if not content_type or not content_type.startswith("image"):
+                    log_warning(f"URL does not point to an image. Content-Type: {content_type}")
+                    return False
+
+                path = Path(output_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(output_path, "wb") as file:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        if chunk:
+                            file.write(chunk)
+
+                log_info(f"Image successfully downloaded and saved to '{output_path}'.")
+                return True
+
+        except asyncio.TimeoutError:
+            log_warning(f"Timeout downloading image from {url} (attempt {attempt + 1}/{max_retries})")
+        except httpx.HTTPError as e:
+            log_warning(f"Error downloading the image: {e} (attempt {attempt + 1}/{max_retries})")
+        except IOError as e:
+            log_warning(f"Error saving the image to '{output_path}': {e}")
+            return False
+
+        if attempt < max_retries - 1:
+            await asyncio.sleep(backoff)
+            backoff *= 2
+
+    return False
+
+
+async def async_download_audio(
+    url: str,
+    output_path: str,
+    timeout: int = 60,
+    max_retries: int = 3,
+) -> Optional[str]:
+    """Asynchronously download audio from URL.
+
+    Args:
+        url: URL of the audio to download.
+        output_path: Local filesystem path to save the audio.
+        timeout: Request timeout in seconds (default 60).
+        max_retries: Number of retry attempts on failure (default 3).
+
+    Returns:
+        Output path if download succeeded, None otherwise.
+    """
+    client = get_default_async_client()
+    backoff = 1.0
+
+    for attempt in range(max_retries):
+        try:
+            async with asyncio.timeout(timeout):
+                response = await client.get(url)
+                response.raise_for_status()
+
+                path = Path(output_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(output_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        f.write(chunk)
+
+                return output_path
+
+        except asyncio.TimeoutError:
+            log_warning(f"Timeout downloading audio from {url} (attempt {attempt + 1}/{max_retries})")
+        except httpx.HTTPError as e:
+            log_warning(f"Error downloading audio: {e} (attempt {attempt + 1}/{max_retries})")
+
+        if attempt < max_retries - 1:
+            await asyncio.sleep(backoff)
+            backoff *= 2
+
+    return None
+
+
+async def async_download_video(
+    url: str,
+    output_path: str,
+    timeout: int = 120,
+    max_retries: int = 3,
+) -> Optional[str]:
+    """Asynchronously download video from URL.
+
+    Args:
+        url: URL of the video to download.
+        output_path: Local filesystem path to save the video.
+        timeout: Request timeout in seconds (default 120 for larger files).
+        max_retries: Number of retry attempts on failure (default 3).
+
+    Returns:
+        Output path if download succeeded, None otherwise.
+    """
+    client = get_default_async_client()
+    backoff = 1.0
+
+    for attempt in range(max_retries):
+        try:
+            async with asyncio.timeout(timeout):
+                response = await client.get(url)
+                response.raise_for_status()
+
+                path = Path(output_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(output_path, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        f.write(chunk)
+
+                return output_path
+
+        except asyncio.TimeoutError:
+            log_warning(f"Timeout downloading video from {url} (attempt {attempt + 1}/{max_retries})")
+        except httpx.HTTPError as e:
+            log_warning(f"Error downloading video: {e} (attempt {attempt + 1}/{max_retries})")
+
+        if attempt < max_retries - 1:
+            await asyncio.sleep(backoff)
+            backoff *= 2
+
+    return None
+
+
+async def async_download_file(
+    url: str,
+    output_path: str,
+    timeout: int = 60,
+    max_retries: int = 3,
+) -> bool:
+    """Asynchronously download a file from URL and save to local path.
+
+    Args:
+        url: URL of the file to download.
+        output_path: Local filesystem path to save the file.
+        timeout: Request timeout in seconds (default 60).
+        max_retries: Number of retry attempts on failure (default 3).
+
+    Returns:
+        True if download succeeded, False otherwise.
+
+    Raises:
+        Exception: If download fails after all retries.
+    """
+    client = get_default_async_client()
+    backoff = 1.0
+    last_exception: Optional[Exception] = None
+
+    for attempt in range(max_retries):
+        try:
+            async with asyncio.timeout(timeout):
+                response = await client.get(url)
+                response.raise_for_status()
+
+                output_file = Path(output_path)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(output_file, "wb") as f:
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                return True
+
+        except asyncio.TimeoutError as e:
+            last_exception = e
+            log_warning(f"Timeout downloading file from {url} (attempt {attempt + 1}/{max_retries})")
+        except httpx.HTTPError as e:
+            last_exception = e
+            log_warning(f"HTTP error downloading file from {url}: {e} (attempt {attempt + 1}/{max_retries})")
+
+        if attempt < max_retries - 1:
+            await asyncio.sleep(backoff)
+            backoff *= 2
+
+    raise Exception(f"Failed to download file from {url} after {max_retries} attempts: {last_exception}")

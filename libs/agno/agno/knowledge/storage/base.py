@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
+from agno.utils.log import log_warning
+
 
 @dataclass
 class PageImageStorage(ABC):
@@ -72,3 +74,43 @@ class PageImageStorage(ABC):
     async def async_sign_url(self, base_url: str, expires: int = 3600) -> str:
         """Async wrapper around ``sign_url()``."""
         return await asyncio.to_thread(self.sign_url, base_url, expires)
+
+    async def async_upload_with_retry(
+        self,
+        local_path: str,
+        object_key: str,
+        content_type: Optional[str] = None,
+        max_retries: int = 3,
+        backoff: float = 2.0,
+    ) -> str:
+        """Upload with exponential backoff retry on failure.
+
+        Args:
+            local_path: Path to the local file.
+            object_key: Key (path) inside the bucket.
+            content_type: Optional MIME type.
+            max_retries: Maximum number of retry attempts (default 3).
+            backoff: Base backoff factor for exponential delay (default 2.0).
+
+        Returns:
+            Permanent HTTPS URL without a signature.
+
+        Raises:
+            Exception: If all retry attempts fail.
+        """
+        last_exception: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            try:
+                return await self.async_upload(local_path, object_key, content_type)
+            except Exception as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = backoff**attempt
+                    log_warning(
+                        f"Upload failed for {local_path} (attempt {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time}s..."
+                    )
+                    await asyncio.sleep(wait_time)
+
+        raise last_exception

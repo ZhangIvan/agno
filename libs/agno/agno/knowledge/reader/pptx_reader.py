@@ -66,7 +66,10 @@ class PPTXReader(Reader):
                 presentation = Presentation(file)
                 doc_name = name or getattr(file, "name", "pptx_file").split(".")[0]
                 if self.capture_pages:
-                    import os, shutil, tempfile
+                    import os
+                    import shutil
+                    import tempfile
+
                     if hasattr(file, "seek"):
                         file.seek(0)
                     _tmp = tempfile.NamedTemporaryFile(suffix=".pptx", delete=False)
@@ -84,6 +87,7 @@ class PPTXReader(Reader):
             if self.capture_pages and file_path:
                 try:
                     from agno.knowledge.reader.page_capture import capture_pptx_slides, get_page_cache_dir
+
                     cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
                     page_images = capture_pptx_slides(file_path, cache_dir, dpi=self.image_dpi)
                 except Exception as e:
@@ -155,6 +159,7 @@ class PPTXReader(Reader):
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass

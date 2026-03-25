@@ -56,7 +56,7 @@ class ByteDanceTOSStorage(PageImageStorage):
     def _key_from_url(self, base_url: str) -> str:
         prefix = f"https://{self.bucket_name}.{self.endpoint}/"
         if base_url.startswith(prefix):
-            return base_url[len(prefix):].split("?")[0]
+            return base_url[len(prefix) :].split("?")[0]
         return base_url.split("?")[0].split("/", 3)[-1]
 
     def upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
@@ -73,5 +73,6 @@ class ByteDanceTOSStorage(PageImageStorage):
         log_debug(f"ByteDanceTOS sign_url: {key}  expires={expires}s")
         client = self._get_client()
         from tos.enum import HttpMethodType
+
         result = client.pre_signed_url(HttpMethodType.Http_Method_Get, self.bucket_name, key, expires=expires)
         return result.signed_url
