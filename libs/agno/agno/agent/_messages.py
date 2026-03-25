@@ -1831,6 +1831,9 @@ def get_relevant_docs_from_knowledge(
             log_debug("No relevant documents found for query")
             return None
 
+        _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
+        if callable(_to_ref):
+            return [_to_ref(doc) for doc in relevant_docs]
         return [doc.to_dict() for doc in relevant_docs]
     except Exception as e:
         log_warning(f"Error retrieving from knowledge base: {e}")
@@ -1930,6 +1933,9 @@ async def aget_relevant_docs_from_knowledge(
             log_debug("No relevant documents found for query")
             return None
 
+        _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
+        if callable(_to_ref):
+            return [_to_ref(doc) for doc in relevant_docs]
         return [doc.to_dict() for doc in relevant_docs]
     except Exception as e:
         log_warning(f"Error retrieving from knowledge base: {e}")

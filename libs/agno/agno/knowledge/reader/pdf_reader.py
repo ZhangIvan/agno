@@ -297,52 +297,12 @@ class BasePDFReader(Reader):
         page_images: Optional[Dict[int, str]] = None,
         pages_cache_dir: Optional[str] = None,
     ):
-        documents: List[Document] = []
-        total_pages = len(pdf_content)
-
-        if self.split_on_pages:
-            shift = page_number_shift if page_number_shift is not None else 1
-            for page_index, page_content in enumerate(pdf_content):
-                page_number = page_index + shift
-                # raw_page_num is the physical 1-based page index used by page_images and cache filenames
-                raw_page_num = page_index + 1
-                if page_content:
-                    # Store raw_page_num as page_number so sliding-window lookups align
-                    # with page_N.png cache filenames; keep display number in "page" field
-                    meta: dict = {"page": page_number, "page_number": raw_page_num, "total_pages": total_pages}
-                    if page_images:
-                        if raw_page_num in page_images:
-                            meta["page_image_path"] = page_images[raw_page_num]
-                            meta["doc_type"] = "text_chunk"
-                            if pages_cache_dir:
-                                meta["pages_cache_dir"] = pages_cache_dir
-                    documents.append(
-                        Document(
-                            name=doc_name,
-                            id=(str(uuid4()) if use_uuid_for_id else f"{doc_name}_{page_number}"),
-                            meta_data=meta,
-                            content=page_content,
-                        )
-                    )
-        else:
-            if pdf_content:
-                pdf_content_str = "\n".join(pdf_content)
-                document = Document(
-                    name=doc_name,
-                    id=str(uuid4()) if use_uuid_for_id else doc_name,
-                    meta_data={},
-                    content=pdf_content_str,
-                )
-                documents.append(document)
-
-        if self.chunk:
-            text_docs = self._build_chunked_documents(documents)
-        else:
-            text_docs = documents
-
-        # Append image documents (one per page) for multimodal embedding
+        # Image-only mode when page captures are available (mirrors PPTX behavior).
+        # Each page becomes a single page_image doc embedded via image, not text.
         if page_images and self.split_on_pages:
-            for raw_page_num, image_path in page_images.items():
+            total_pages = len(page_images)
+            result: List[Document] = []
+            for raw_page_num, image_path in sorted(page_images.items()):
                 img_meta: dict = {
                     "doc_type": "page_image",
                     "page_number": raw_page_num,
@@ -351,7 +311,7 @@ class BasePDFReader(Reader):
                 }
                 if pages_cache_dir:
                     img_meta["pages_cache_dir"] = pages_cache_dir
-                text_docs.append(
+                result.append(
                     Document(
                         name=doc_name,
                         id=f"{doc_name}_img_{raw_page_num}",
@@ -360,8 +320,39 @@ class BasePDFReader(Reader):
                         content_id=f"{doc_name}_page_{raw_page_num}",
                     )
                 )
+            return result
 
-        return text_docs
+        # Text-only fallback when no page captures are available.
+        total_pages = len(pdf_content)
+        documents: List[Document] = []
+        if self.split_on_pages:
+            shift = page_number_shift if page_number_shift is not None else 1
+            for page_index, page_content in enumerate(pdf_content):
+                page_number = page_index + shift
+                raw_page_num = page_index + 1
+                if page_content:
+                    documents.append(
+                        Document(
+                            name=doc_name,
+                            id=(str(uuid4()) if use_uuid_for_id else f"{doc_name}_{page_number}"),
+                            meta_data={"page": page_number, "page_number": raw_page_num, "total_pages": total_pages},
+                            content=page_content,
+                        )
+                    )
+        else:
+            if pdf_content:
+                documents.append(
+                    Document(
+                        name=doc_name,
+                        id=str(uuid4()) if use_uuid_for_id else doc_name,
+                        meta_data={},
+                        content="\n".join(pdf_content),
+                    )
+                )
+
+        if self.chunk:
+            return self._build_chunked_documents(documents)
+        return documents
 
     def _pdf_reader_to_documents(
         self,

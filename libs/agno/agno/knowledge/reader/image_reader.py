@@ -1,6 +1,5 @@
 import asyncio
 import os
-import shutil
 from pathlib import Path
 from typing import IO, Any, List, Optional, Union
 
@@ -48,26 +47,36 @@ class ImageReader(Reader):
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _make_cache_copy(self, src: Union[str, IO[Any]], doc_name: str, img_suffix: str) -> tuple:
-        """Copy *src* into the per-document page-cache dir.
+    def _to_webp(self, src: Union[str, IO[Any]], doc_name: str, webp_quality: int = 82) -> tuple:
+        """Convert *src* image to WebP and save it in the per-document page-cache dir.
 
+        WebP is 5-10x smaller than PNG and supported by all major vision APIs.
         Returns (cache_path, cache_dir).
         """
         from agno.knowledge.reader.page_capture import get_page_cache_dir
 
+        try:
+            from PIL import Image
+        except ImportError:
+            raise ImportError("`Pillow` not installed. Please install it via `pip install Pillow`.")
+
         cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
-        cache_path = os.path.join(cache_dir, f"page_1{img_suffix}")
+        cache_path = os.path.join(cache_dir, "page_1.webp")
 
         if isinstance(src, str):
-            shutil.copy2(src, cache_path)
+            img = Image.open(src).convert("RGB")
         else:
             if hasattr(src, "seek"):
                 src.seek(0)
-            with open(cache_path, "wb") as fout:
-                shutil.copyfileobj(src, fout)
+            img = Image.open(src).convert("RGB")
             if hasattr(src, "seek"):
                 src.seek(0)
 
+        img.save(
+            cache_path, "WEBP", quality=webp_quality, method=4,
+            lossless=False,  # 有损 = 体积暴减
+            optimize=True  # 额外优化文件大小
+        )
         return cache_path, cache_dir
 
     # ------------------------------------------------------------------
@@ -75,21 +84,24 @@ class ImageReader(Reader):
     # ------------------------------------------------------------------
 
     def read(self, file: Union[Path, IO[Any]], name: Optional[str] = None, **kwargs) -> List[Document]:
-        """Read an image file and return a single ``page_image`` Document."""
+        """Read an image file and return a single ``page_image`` Document.
+
+        The image is always converted to WebP (smaller size, same visual quality)
+        and stored in the page-cache dir.  The WebP copy is marked for cleanup
+        after OSS upload via ``pages_cache_dir``.
+        """
         try:
             if isinstance(file, Path):
                 if not file.exists():
                     raise FileNotFoundError(f"Could not find file: {file}")
                 log_debug(f"Reading image: {file}")
                 doc_name = name or file.stem
-                img_suffix = file.suffix.lower() or ".png"
-                cache_path, cache_dir = self._make_cache_copy(str(file), doc_name, img_suffix)
+                cache_path, cache_dir = self._to_webp(str(file), doc_name)
             else:
                 raw_name = name or getattr(file, "name", "image.png")
                 base = os.path.basename(raw_name)
                 doc_name = base.rsplit(".", 1)[0] if "." in base else base
-                img_suffix = os.path.splitext(base)[1].lower() or ".png"
-                cache_path, cache_dir = self._make_cache_copy(file, doc_name, img_suffix)
+                cache_path, cache_dir = self._to_webp(file, doc_name)
 
             return [
                 Document(

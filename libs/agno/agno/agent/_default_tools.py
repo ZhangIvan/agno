@@ -245,16 +245,18 @@ def create_knowledge_search_tool(
                 ):
                     raw_docs = resolved_knowledge.search(query=query, filters=knowledge_filters)
                     retrieval_timer.stop()
+                    _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        _track_references([d.to_dict() for d in raw_docs], query, retrieval_timer.elapsed)
+                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
                             from agno.tools.function import ToolResult
                             return ToolResult(
-                                content=_format_results([d.to_dict() for d in raw_docs]),
+                                content=_format_results(ref_dicts),
                                 images=images,
                             )
-                    return _format_results([d.to_dict() for d in raw_docs] if raw_docs else None)
+                    return _format_results(ref_dicts if raw_docs else None)
 
                 docs = _messages.get_relevant_docs_from_knowledge(
                     agent,
@@ -293,16 +295,18 @@ def create_knowledge_search_tool(
                 ):
                     raw_docs = await resolved_knowledge.asearch(query=query, filters=knowledge_filters)
                     retrieval_timer.stop()
+                    _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        _track_references([d.to_dict() for d in raw_docs], query, retrieval_timer.elapsed)
+                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
                             from agno.tools.function import ToolResult
                             return ToolResult(
-                                content=_format_results([d.to_dict() for d in raw_docs]),
+                                content=_format_results(ref_dicts),
                                 images=images,
                             )
-                    return _format_results([d.to_dict() for d in raw_docs] if raw_docs else None)
+                    return _format_results(ref_dicts if raw_docs else None)
 
                 docs = await _messages.aget_relevant_docs_from_knowledge(
                     agent,

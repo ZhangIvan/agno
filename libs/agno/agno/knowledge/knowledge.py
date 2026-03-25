@@ -3382,14 +3382,19 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         page_url_map: Dict[int, str] = {}  # page_num -> image_url
         local_paths: List[str] = []
 
-        # Phase 1: upload page_image docs and build url map
+        # Phase 1: upload any doc that carries a page_image_path and build url map.
+        # This covers both page_image docs (PDF/PPTX/ImageReader) and any text_chunk
+        # docs that still carry a local image reference.
         for doc in docs:
-            if doc.meta_data.get("doc_type") != "page_image":
-                continue
             local_path = doc.meta_data.get("page_image_path")
-            page_num = doc.meta_data.get("page_number")
-            if not local_path or page_num is None:
+            if not local_path:
                 continue
+            page_num = doc.meta_data.get("page_number")
+            if page_num is None:
+                continue
+            # pages_cache_dir present → generated temp file, safe to delete after upload.
+            # Absent (e.g. ImageReader Path input) → user's original, must be preserved.
+            is_cache_file = "pages_cache_dir" in doc.meta_data
             content_id = doc.content_id or doc.name or ""
             img_suffix = os.path.splitext(local_path)[1] or ".webp"
             object_key = f"{content_id}/page_{page_num}{img_suffix}"
@@ -3403,7 +3408,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 doc.meta_data.pop("pages_cache_dir", None)
                 doc.meta_data.pop("pages_cache_url", None)
                 page_url_map[page_num] = url
-                local_paths.append(local_path)
+                if is_cache_file:
+                    local_paths.append(local_path)
             except Exception as e:
                 log_warning(f"PageImageStorage.upload failed for {local_path}: {e}")
 
@@ -3431,14 +3437,15 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         page_url_map: Dict[int, str] = {}
         local_paths: List[str] = []
 
-        # Phase 1: upload page_image docs and build url map
+        # Phase 1: upload any doc that carries a page_image_path and build url map.
         for doc in docs:
-            if doc.meta_data.get("doc_type") != "page_image":
-                continue
             local_path = doc.meta_data.get("page_image_path")
-            page_num = doc.meta_data.get("page_number")
-            if not local_path or page_num is None:
+            if not local_path:
                 continue
+            page_num = doc.meta_data.get("page_number")
+            if page_num is None:
+                continue
+            is_cache_file = "pages_cache_dir" in doc.meta_data
             content_id = doc.content_id or doc.name or ""
             img_suffix = os.path.splitext(local_path)[1] or ".webp"
             object_key = f"{content_id}/page_{page_num}{img_suffix}"
@@ -3450,7 +3457,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 doc.meta_data.pop("pages_cache_dir", None)
                 doc.meta_data.pop("pages_cache_url", None)
                 page_url_map[page_num] = url
-                local_paths.append(local_path)
+                if is_cache_file:
+                    local_paths.append(local_path)
             except Exception as e:
                 log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
 
@@ -3699,7 +3707,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         return self._resolve_page_image(doc, page_num)
 
     def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
-        """Collect page images for retrieved documents using a sliding window.
+        """Collect page images for retrieved documents.
 
         For each matched document:
         - If it is a page_image document, include that exact page.
@@ -3738,10 +3746,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 total = 9999
 
             doc_id = doc.content_id or doc.name or ""
-            if doc.meta_data.get("file_url") and self.page_image_storage:
-                doc.meta_data['file_url'] = self.page_image_storage.sign_url(
-                    doc.meta_data.get("file_url"), expires=7200
-                )
+            # if doc.meta_data.get("file_url") and self.page_image_storage:
+            #     doc.meta_data['file_url'] = self.page_image_storage.sign_url(
+            #         doc.meta_data.get("file_url"), expires=7200
+            #     )
             if doc.meta_data.get("doc_type") == "page_image":
                 # Direct image hit — include exactly this page
                 pages_to_add = [page_num] if page_num is not None else []
