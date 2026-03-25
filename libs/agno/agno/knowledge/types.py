@@ -28,6 +28,16 @@ class ContentType(str, Enum):
     XLSX = ".xlsx"
     XLS = ".xls"
 
+    # Image file extensions
+    PNG = ".png"
+    JPG = ".jpg"
+    JPEG = ".jpeg"
+    GIF = ".gif"
+    WEBP = ".webp"
+    BMP = ".bmp"
+    TIFF = ".tiff"
+    TIF = ".tif"
+
 
 def get_content_type_enum(content_type_str: str) -> ContentType:
     """Convert a content type string to ContentType enum."""

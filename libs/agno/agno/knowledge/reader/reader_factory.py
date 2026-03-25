@@ -76,6 +76,10 @@ class ReaderFactory:
             "name": "WebSearchReader",
             "description": "Executes web searches and processes results with relevance ranking and content extraction",
         },
+        "image": {
+            "name": "ImageReader",
+            "description": "Processes image files (PNG, JPG, JPEG, GIF, WEBP, BMP, TIFF) for multimodal embedding",
+        },
     }
 
     @classmethod
@@ -276,6 +280,18 @@ class ReaderFactory:
         return WebSearchReader(**config)
 
     @classmethod
+    def _get_image_reader(cls, **kwargs) -> Reader:
+        """Get Image reader instance."""
+        from agno.knowledge.reader.image_reader import ImageReader
+
+        config: Dict[str, Any] = {
+            "name": "Image Reader",
+            "description": "Processes image files (PNG, JPG, JPEG, GIF, WEBP, BMP, TIFF) for multimodal embedding",
+        }
+        config.update(kwargs)
+        return ImageReader(**config)
+
+    @classmethod
     def _get_reader_method(cls, reader_key: str) -> Callable[[], Reader]:
         """Get the appropriate reader method for the given key."""
         method_name = f"_get_{reader_key}_reader"
@@ -318,6 +334,7 @@ class ReaderFactory:
             "arxiv": ("agno.knowledge.reader.arxiv_reader", "ArxivReader"),
             "wikipedia": ("agno.knowledge.reader.wikipedia_reader", "WikipediaReader"),
             "web_search": ("agno.knowledge.reader.web_search_reader", "WebSearchReader"),
+            "image": ("agno.knowledge.reader.image_reader", "ImageReader"),
         }
 
         if reader_key not in reader_class_map:
@@ -371,6 +388,8 @@ class ReaderFactory:
             return cls.create_reader("markdown")
         elif extension in [".txt", ".text"]:
             return cls.create_reader("text")
+        elif extension in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]:
+            return cls.create_reader("image")
         else:
             # Default to text reader for unknown extensions
             return cls.create_reader("text")

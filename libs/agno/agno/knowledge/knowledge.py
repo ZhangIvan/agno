@@ -1081,6 +1081,11 @@ class Knowledge(RemoteKnowledge):
         return self._get_reader("text")
 
     @property
+    def image_reader(self) -> Optional[Reader]:
+        """Image reader - lazy loaded via factory."""
+        return self._get_reader("image")
+
+    @property
     def website_reader(self) -> Optional[Reader]:
         """Website reader - lazy loaded via factory."""
         return self._get_reader("website")
@@ -1197,6 +1202,8 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader, ""
         elif file_extension in [".xlsx", ".xls"]:
             return self.excel_reader, ""
+        elif file_extension in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]:
+            return self.image_reader, ""
         else:
             return self.text_reader, ""
 
@@ -1229,6 +1236,8 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader
         elif uri_lower.endswith(".xlsx") or uri_lower.endswith(".xls"):
             return self.excel_reader
+        elif any(uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]):
+            return self.image_reader
         else:
             return self.text_reader
 
@@ -3365,6 +3374,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         Returns:
             (docs, local_paths) where local_paths are PNG files to delete after insert.
         """
+        import os
+
         if not self.page_image_storage:
             return docs, []
 
@@ -3380,9 +3391,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if not local_path or page_num is None:
                 continue
             content_id = doc.content_id or doc.name or ""
-            object_key = f"{content_id}/page_{page_num}.png"
+            img_suffix = os.path.splitext(local_path)[1] or ".webp"
+            object_key = f"{content_id}/page_{page_num}{img_suffix}"
             try:
-                url = self.page_image_storage.upload(local_path, object_key, content_type="image/png")
+                url = self.page_image_storage.upload(local_path, object_key)
                 doc.meta_data["page_image_url"] = url
                 # Move local path out of meta (won't be stored in vector DB) into
                 # the transient embed field so embed() can still find it.
@@ -3411,6 +3423,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
     async def _async_upload_page_images(self, docs: List[Document]) -> Tuple[List[Document], List[str]]:
         """Async version of ``_upload_page_images``."""
+        import os
+
         if not self.page_image_storage:
             return docs, []
 
@@ -3426,9 +3440,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if not local_path or page_num is None:
                 continue
             content_id = doc.content_id or doc.name or ""
-            object_key = f"{content_id}/page_{page_num}.png"
+            img_suffix = os.path.splitext(local_path)[1] or ".webp"
+            object_key = f"{content_id}/page_{page_num}{img_suffix}"
             try:
-                url = await self.page_image_storage.async_upload(local_path, object_key, content_type="image/png")
+                url = await self.page_image_storage.async_upload(local_path, object_key)
                 doc.meta_data["page_image_url"] = url
                 doc.local_embed_path = local_path
                 doc.meta_data.pop("page_image_path", None)

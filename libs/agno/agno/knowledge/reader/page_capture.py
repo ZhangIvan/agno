@@ -46,28 +46,41 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
             page = doc[page_index]
             pix = page.get_pixmap(matrix=matrix)
             page_number = page_index + 1
-            image_path = str(output_path / f"page_{page_number}.png")
+            # image_path = str(output_path / f"page_{page_number}.png")
+            # 直接保存为 WebP（OpenAI 完美支持）
+            image_path = str(output_path / f"page_{page_number}.webp")
 
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
             if optimize:
-                # 转换为 P 模式（调色板），减少颜色数量
-                img = img.quantize(colors=256, method=Image.Quantize.LIBIMAGEQUANT)
-                # # 当前默认（推荐）
-                # dpi=150, optimize=True  # 平衡质量和体积
-                # # 高质量需求
-                # dpi=200, optimize=True  # 更清晰，文件稍大
-                # # 极致压缩（可接受轻微损失）
-                # dpi=150, optimize="aggressive"  # 需要额外 quantize 处理
+                # # 转换为 P 模式（调色板），减少颜色数量
+                # img = img.quantize(colors=256)
+                # # # 当前默认（推荐）
+                # # dpi=150, optimize=True  # 平衡质量和体积
+                # # # 高质量需求
+                # # dpi=200, optimize=True  # 更清晰，文件稍大
+                # # # 极致压缩（可接受轻微损失）
+                # # dpi=150, optimize="aggressive"  # 需要额外 quantize 处理
+                # img.save(
+                #     image_path,
+                #     "PNG",
+                #     optimize=True,
+                #     compress_level=9,
+                # )
+                # ==============================================
+                # OpenAI 专用最优压缩参数（体积小 + 识别率 100%）
+                # ==============================================
                 img.save(
                     image_path,
-                    "PNG",
-                    optimize=True,
-                    compress_level=9,
+                    "WebP",
+                    quality=82,  # 质量 85 最均衡（文档足够清晰）
+                    lossless=False,  # 有损 = 体积暴减
+                    method=4,  # 压缩速度与效果平衡
+                    optimize=True  # 额外优化文件大小
                 )
             else:
-                img.save(image_path, "PNG")
-
+                # img.save(image_path, "PNG")
+                img.save(image_path, "WebP", quality=85)
             page_images[page_number] = image_path
             log_debug(f"Captured page {page_number} → {image_path} ({pix.width}x{pix.height})")
         doc.close()

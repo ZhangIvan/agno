@@ -417,7 +417,7 @@ class BasePDFReader(Reader):
                 resolved_cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
                 page_images = capture_pdf_pages(pdf_path, resolved_cache_dir, dpi=self.image_dpi)
             except Exception as e:
-                log_warning(f"Failed to capture PDF page images: {e}")
+                log_warning(f"Failed to capture PDF page images: {e}", exc_info=True)
 
         return self._create_documents(
             pdf_content, doc_name, use_uuid_for_id, shift,
@@ -489,7 +489,7 @@ class BasePDFReader(Reader):
                     capture_pdf_pages, pdf_path, resolved_cache_dir, self.image_dpi
                 )
             except Exception as e:
-                log_warning(f"Failed to capture PDF page images: {e}")
+                log_warning(f"Failed to capture PDF page images: {e}", exc_info=True)
 
         return self._create_documents(
             pdf_content_clean, doc_name, use_uuid_for_id, shift,
