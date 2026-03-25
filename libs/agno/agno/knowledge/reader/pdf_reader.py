@@ -210,7 +210,7 @@ class BasePDFReader(Reader):
         chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(chunk_size=5000),
         capture_pages: bool = True,
         pages_cache_dir: Optional[str] = None,
-        image_dpi: int = 150,
+        image_dpi: int = 100,
         **kwargs,
     ):
         if page_start_numbering_format is None:

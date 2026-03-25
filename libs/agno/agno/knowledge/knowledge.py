@@ -60,9 +60,9 @@ class Knowledge(RemoteKnowledge):
     # when sent to the LLM. Requires documents to have page_image_path in metadata.
     use_page_images: bool = False
     # Maximum number of page images to include in a single retrieval response.
-    max_retrieval_images: int = 6
+    max_retrieval_images: int = 3
     # Sliding window around each matched page (±N pages). 1 means prev+current+next.
-    image_window_size: int = 1
+    image_window_size: int = 0
     # Optional OSS/cloud storage backend for page images.
     # When set, page PNGs are uploaded at insert time and signed URLs are returned
     # at retrieval time instead of local file paths.
@@ -1403,6 +1403,8 @@ class Knowledge(RemoteKnowledge):
                 if not content.id:
                     content.id = generate_id(content.content_hash or "")
                 self._prepare_documents_for_insert(read_documents, content.id, metadata=content.metadata)
+                if self.page_image_storage:
+                    read_documents = await self._async_upload_original_file(content, path, read_documents)
 
                 await self._ahandle_vector_db_insert(content, read_documents, upsert)
 
@@ -1488,6 +1490,8 @@ class Knowledge(RemoteKnowledge):
                 if not content.id:
                     content.id = generate_id(content.content_hash or "")
                 self._prepare_documents_for_insert(read_documents, content.id, metadata=content.metadata)
+                if self.page_image_storage:
+                    read_documents = self._upload_original_file(content, path, read_documents)
 
                 self._handle_vector_db_insert(content, read_documents, upsert)
 
@@ -1904,6 +1908,9 @@ class Knowledge(RemoteKnowledge):
                 if not content.id:
                     content.id = generate_id(content.content_hash or "")
                 self._prepare_documents_for_insert(read_documents, content.id, metadata=content.metadata)
+                if self.page_image_storage:
+                    content_io.seek(0)
+                    read_documents = await self._async_upload_original_file(content, content_io, read_documents)
 
                 if len(read_documents) == 0:
                     content.status = ContentStatus.FAILED
@@ -2011,6 +2018,9 @@ class Knowledge(RemoteKnowledge):
                 if not content.id:
                     content.id = generate_id(content.content_hash or "")
                 self._prepare_documents_for_insert(read_documents, content.id, metadata=content.metadata)
+                if self.page_image_storage:
+                    content_io.seek(0)
+                    read_documents = self._upload_original_file(content, content_io, read_documents)
 
                 if len(read_documents) == 0:
                     content.status = ContentStatus.FAILED
@@ -2385,8 +2395,9 @@ class Knowledge(RemoteKnowledge):
             await self._aupdate_content(content)
             return
 
+        local_page_paths: List[str] = []
         if self.page_image_storage:
-            read_documents = await self._async_upload_page_images(read_documents)
+            read_documents, local_page_paths = await self._async_upload_page_images(read_documents)
 
         if self.vector_db.upsert_available() and upsert:
             try:
@@ -2411,6 +2422,9 @@ class Knowledge(RemoteKnowledge):
                 await self._aupdate_content(content)
                 return
 
+        if local_page_paths:
+            self._cleanup_local_page_images(read_documents, local_page_paths)
+
         content.status = ContentStatus.COMPLETED
         await self._aupdate_content(content)
 
@@ -2427,8 +2441,9 @@ class Knowledge(RemoteKnowledge):
             self._update_content(content)
             return
 
+        local_page_paths: List[str] = []
         if self.page_image_storage:
-            read_documents = self._upload_page_images(read_documents)
+            read_documents, local_page_paths = self._upload_page_images(read_documents)
 
         if self.vector_db.upsert_available() and upsert:
             try:
@@ -2452,6 +2467,9 @@ class Knowledge(RemoteKnowledge):
                 content.status_message = "Could not insert embedding"
                 self._update_content(content)
                 return
+
+        if local_page_paths:
+            self._cleanup_local_page_images(read_documents, local_page_paths)
 
         content.status = ContentStatus.COMPLETED
         self._update_content(content)
@@ -3084,7 +3102,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if run_response is not None and docs:
                 references = MessageReferences(
                     query=query,
-                    references=[doc.to_dict() for doc in docs],
+                    references=[self._doc_to_reference_dict(doc) for doc in docs],
                     time=round(retrieval_timer.elapsed, 4),
                 )
                 if run_response.references is None:
@@ -3131,7 +3149,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if run_response is not None and docs:
                 references = MessageReferences(
                     query=query,
-                    references=[doc.to_dict() for doc in docs],
+                    references=[self._doc_to_reference_dict(doc) for doc in docs],
                     time=round(retrieval_timer.elapsed, 4),
                 )
                 if run_response.references is None:
@@ -3228,7 +3246,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if run_response is not None and docs:
                 references = MessageReferences(
                     query=query,
-                    references=[doc.to_dict() for doc in docs],
+                    references=[self._doc_to_reference_dict(doc) for doc in docs],
                     time=round(retrieval_timer.elapsed, 4),
                 )
                 if run_response.references is None:
@@ -3297,7 +3315,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             if run_response is not None and docs:
                 references = MessageReferences(
                     query=query,
-                    references=[doc.to_dict() for doc in docs],
+                    references=[await self._async_doc_to_reference_dict(doc) for doc in docs],
                     time=round(retrieval_timer.elapsed, 4),
                 )
                 if run_response.references is None:
@@ -3331,57 +3349,277 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         func.strict = False
         return func
 
-    def _upload_page_images(self, docs: List[Document]) -> List[Document]:
-        """Upload page image PNGs to OSS storage and annotate docs with remote URLs.
+    def _upload_page_images(self, docs: List[Document]) -> Tuple[List[Document], List[str]]:
+        """Upload page image PNGs to OSS and annotate docs with remote URLs.
 
-        Called during the insert pipeline when ``page_image_storage`` is set.
-        Adds ``page_image_url`` and ``pages_cache_url`` to each page_image doc's
-        metadata so that retrieval can sign and return HTTPS URLs.
-        Local ``page_image_path`` is preserved as a fallback.
+        OSS key: ``{content_id}/page_{N}.png`` (storage backend prepends key_prefix).
+
+        Local path handling:
+        - ``page_image_path`` and ``pages_cache_dir`` are removed from ``meta_data``
+          immediately so they are never persisted to the vector store.
+        - The local path is saved in ``doc.local_embed_path`` (a transient, non-persisted
+          Document field) so that ``embed()`` can still use it during ``vector_db.insert()``.
+        - The caller should invoke ``_cleanup_local_page_images()`` after insert to
+          delete the local files and clear ``local_embed_path``.
+
+        Returns:
+            (docs, local_paths) where local_paths are PNG files to delete after insert.
+        """
+        if not self.page_image_storage:
+            return docs, []
+
+        page_url_map: Dict[int, str] = {}  # page_num -> image_url
+        local_paths: List[str] = []
+
+        # Phase 1: upload page_image docs and build url map
+        for doc in docs:
+            if doc.meta_data.get("doc_type") != "page_image":
+                continue
+            local_path = doc.meta_data.get("page_image_path")
+            page_num = doc.meta_data.get("page_number")
+            if not local_path or page_num is None:
+                continue
+            content_id = doc.content_id or doc.name or ""
+            object_key = f"{content_id}/page_{page_num}.png"
+            try:
+                url = self.page_image_storage.upload(local_path, object_key, content_type="image/png")
+                doc.meta_data["page_image_url"] = url
+                # Move local path out of meta (won't be stored in vector DB) into
+                # the transient embed field so embed() can still find it.
+                doc.local_embed_path = local_path
+                doc.meta_data.pop("page_image_path", None)
+                doc.meta_data.pop("pages_cache_dir", None)
+                doc.meta_data.pop("pages_cache_url", None)
+                page_url_map[page_num] = url
+                local_paths.append(local_path)
+            except Exception as e:
+                log_warning(f"PageImageStorage.upload failed for {local_path}: {e}")
+
+        # Phase 2: propagate url info to text_chunk docs with matching page_number
+        if page_url_map:
+            for doc in docs:
+                if doc.meta_data.get("doc_type") == "text_chunk":
+                    page_num = doc.meta_data.get("page_number")
+                    if page_num in page_url_map:
+                        doc.meta_data["page_image_url"] = page_url_map[page_num]
+                        # Also strip local path fields from text_chunk docs
+                        doc.meta_data.pop("page_image_path", None)
+                        doc.meta_data.pop("pages_cache_dir", None)
+                        doc.meta_data.pop("pages_cache_url", None)
+
+        return docs, local_paths
+
+    async def _async_upload_page_images(self, docs: List[Document]) -> Tuple[List[Document], List[str]]:
+        """Async version of ``_upload_page_images``."""
+        if not self.page_image_storage:
+            return docs, []
+
+        page_url_map: Dict[int, str] = {}
+        local_paths: List[str] = []
+
+        # Phase 1: upload page_image docs and build url map
+        for doc in docs:
+            if doc.meta_data.get("doc_type") != "page_image":
+                continue
+            local_path = doc.meta_data.get("page_image_path")
+            page_num = doc.meta_data.get("page_number")
+            if not local_path or page_num is None:
+                continue
+            content_id = doc.content_id or doc.name or ""
+            object_key = f"{content_id}/page_{page_num}.png"
+            try:
+                url = await self.page_image_storage.async_upload(local_path, object_key, content_type="image/png")
+                doc.meta_data["page_image_url"] = url
+                doc.local_embed_path = local_path
+                doc.meta_data.pop("page_image_path", None)
+                doc.meta_data.pop("pages_cache_dir", None)
+                doc.meta_data.pop("pages_cache_url", None)
+                page_url_map[page_num] = url
+                local_paths.append(local_path)
+            except Exception as e:
+                log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
+
+        # Phase 2: propagate url info to text_chunk docs with matching page_number
+        if page_url_map:
+            for doc in docs:
+                if doc.meta_data.get("doc_type") == "text_chunk":
+                    page_num = doc.meta_data.get("page_number")
+                    if page_num in page_url_map:
+                        doc.meta_data["page_image_url"] = page_url_map[page_num]
+                        doc.meta_data.pop("page_image_path", None)
+                        doc.meta_data.pop("pages_cache_dir", None)
+                        doc.meta_data.pop("pages_cache_url", None)
+
+        return docs, local_paths
+
+    def _cleanup_local_page_images(self, docs: List[Document], local_paths: List[str]) -> None:
+        """Delete local page image files after vector DB insert.
+
+        Removes the files listed in ``local_paths``, then tries to remove their
+        parent directory if it becomes empty (handles dedicated cache directories
+        created for PDF/PPTX page image conversion).
+        Also clears the transient ``local_embed_path`` field on each doc.
+        """
+        import os
+
+        parent_dirs: set = set()
+        for local_path in local_paths:
+            try:
+                os.unlink(local_path)
+                parent_dirs.add(os.path.dirname(local_path))
+            except OSError as e:
+                log_warning(f"Could not delete local page cache {local_path}: {e}")
+
+        for parent_dir in parent_dirs:
+            try:
+                os.rmdir(parent_dir)
+            except OSError:
+                pass  # Not empty or already gone — ignore
+
+        for doc in docs:
+            doc.local_embed_path = None
+
+    # Local-path fields that must never appear in returned references
+    _LOCAL_META_FIELDS = ("page_image_path", "pages_cache_dir", "pages_cache_url")
+
+    def _doc_to_reference_dict(self, doc: Document) -> Dict[str, Any]:
+        """Build a reference dict from a retrieved Document suitable for returning to callers.
+
+        - Strips any local file path fields that may have been stored by older code.
+        - Signs ``page_image_url`` and ``file_url`` with the configured storage backend
+          so callers receive time-limited URLs that work for private buckets.
+        """
+        result = doc.to_dict()
+        meta = result.get("meta_data")
+        if not isinstance(meta, dict):
+            return result
+
+        # Work on a copy so the in-memory Document is not mutated
+        meta = dict(meta)
+        result["meta_data"] = meta
+
+        # Strip local path fields (backward compat for already-stored data)
+        for field_name in self._LOCAL_META_FIELDS:
+            meta.pop(field_name, None)
+
+        # Sign OSS URLs if storage is configured
+        if self.page_image_storage:
+            for url_field in ("page_image_url", "file_url"):
+                url = meta.get(url_field)
+                if url:
+                    try:
+                        meta[url_field] = self.page_image_storage.sign_url(url, expires=7200)
+                    except Exception as e:
+                        log_warning(f"sign_url failed for {url_field}={url}: {e}")
+
+        return result
+
+    async def _async_doc_to_reference_dict(self, doc: Document) -> Dict[str, Any]:
+        """Async version of ``_doc_to_reference_dict``."""
+        result = doc.to_dict()
+        meta = result.get("meta_data")
+        if not isinstance(meta, dict):
+            return result
+
+        meta = dict(meta)
+        result["meta_data"] = meta
+
+        for field_name in self._LOCAL_META_FIELDS:
+            meta.pop(field_name, None)
+
+        if self.page_image_storage:
+            for url_field in ("page_image_url", "file_url"):
+                url = meta.get(url_field)
+                if url:
+                    try:
+                        meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=7200)
+                    except Exception as e:
+                        log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
+
+        return result
+
+    def _upload_original_file(
+        self,
+        content: Content,
+        file_source: Union[Path, BytesIO],
+        docs: List[Document],
+    ) -> List[Document]:
+        """Upload the original file to OSS and annotate all docs with ``file_url``.
+
+        OSS key: ``{content_id}/{filename}`` (storage backend prepends key_prefix).
+        For a :class:`~pathlib.Path` source the user's local file is NOT deleted.
+        For a :class:`~io.BytesIO` source a temp file is written, uploaded, then
+        deleted so no local copy of the original is kept.
         """
         if not self.page_image_storage:
             return docs
 
-        for doc in docs:
-            if doc.meta_data.get("doc_type") != "page_image":
-                continue
-            local_path = doc.meta_data.get("page_image_path")
-            page_num = doc.meta_data.get("page_number")
-            if not local_path or page_num is None:
-                continue
-            doc_name = doc.name or ""
-            object_key = f"{doc_name}/page_{page_num}.png"
-            try:
-                url = self.page_image_storage.upload(local_path, object_key)
-                doc.meta_data["page_image_url"] = url
-                # base prefix ends with "/" so sliding-window can do f"{prefix}page_N.png"
-                doc.meta_data["pages_cache_url"] = url.rsplit("/", 1)[0] + "/"
-            except Exception as e:
-                log_warning(f"PageImageStorage.upload failed for {local_path}: {e}")
+        import os
+        import tempfile
 
+        content_id = content.id or ""
+        filename = content.name or "file"
+        object_key = f"{content_id}/{filename}"
+        try:
+            if isinstance(file_source, Path):
+                url = self.page_image_storage.upload(str(file_source), object_key)
+            else:
+                suffix = Path(filename).suffix or ".bin"
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                    file_source.seek(0)
+                    tmp.write(file_source.read())
+                    tmp_path = tmp.name
+                file_source.seek(0)
+                try:
+                    url = self.page_image_storage.upload(tmp_path, object_key)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+            for doc in docs:
+                doc.meta_data["file_url"] = url
+        except Exception as e:
+            log_warning(f"Failed to upload original file {filename}: {e}")
         return docs
 
-    async def _async_upload_page_images(self, docs: List[Document]) -> List[Document]:
-        """Async version of ``_upload_page_images``."""
+    async def _async_upload_original_file(
+        self,
+        content: Content,
+        file_source: Union[Path, BytesIO],
+        docs: List[Document],
+    ) -> List[Document]:
+        """Async version of :meth:`_upload_original_file`."""
         if not self.page_image_storage:
             return docs
 
-        for doc in docs:
-            if doc.meta_data.get("doc_type") != "page_image":
-                continue
-            local_path = doc.meta_data.get("page_image_path")
-            page_num = doc.meta_data.get("page_number")
-            if not local_path or page_num is None:
-                continue
-            doc_name = doc.name or ""
-            object_key = f"{doc_name}/page_{page_num}.png"
-            try:
-                url = await self.page_image_storage.async_upload(local_path, object_key)
-                doc.meta_data["page_image_url"] = url
-                doc.meta_data["pages_cache_url"] = url.rsplit("/", 1)[0] + "/"
-            except Exception as e:
-                log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
+        import os
+        import tempfile
 
+        content_id = content.id or ""
+        filename = content.name or "file"
+        object_key = f"{content_id}/{filename}"
+        try:
+            if isinstance(file_source, Path):
+                url = await self.page_image_storage.async_upload(str(file_source), object_key)
+            else:
+                suffix = Path(filename).suffix or ".bin"
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                    file_source.seek(0)
+                    tmp.write(file_source.read())
+                    tmp_path = tmp.name
+                file_source.seek(0)
+                try:
+                    url = await self.page_image_storage.async_upload(tmp_path, object_key)
+                finally:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+            for doc in docs:
+                doc.meta_data["file_url"] = url
+        except Exception as e:
+            log_warning(f"Failed to upload original file {filename}: {e}")
         return docs
 
     def _resolve_page_image(self, doc: Document, page_num: int) -> Optional[str]:
@@ -3402,7 +3640,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = doc.meta_data.get("page_image_url")
                 if url:
                     try:
-                        return storage.sign_url(url, expires=3600)
+                        return storage.sign_url(url, expires=7200)
                     except Exception as e:
                         log_warning(f"sign_url failed for {url}: {e}")
             # 2. Local: return path if file still exists
@@ -3411,13 +3649,17 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return path
 
         # --- Adjacent page (sliding window) ---
-        # 3. OSS: reconstruct URL from base prefix and sign it
+        # 3. OSS: derive cache URL from the doc's own page_image_url and sign it
         if storage:
-            cache_url = doc.meta_data.get("pages_cache_url")
-            if cache_url:
+            own_url = doc.meta_data.get("page_image_url")
+            if own_url:
+                # Derive the cache directory prefix from the stored URL, e.g.:
+                #   "https://bucket/prefix/content_id/page_3.png"
+                #   -> "https://bucket/prefix/content_id/"
+                cache_url = own_url.rsplit("/", 1)[0] + "/"
                 adj_url = f"{cache_url}page_{page_num}.png"
                 try:
-                    return storage.sign_url(adj_url, expires=3600)
+                    return storage.sign_url(adj_url, expires=7200)
                 except Exception as e:
                     log_warning(f"sign_url failed for {adj_url}: {e}")
 
@@ -3461,7 +3703,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         # Clamp config values to safe bounds
         window = max(0, self.image_window_size)
         max_images = max(1, self.max_retrieval_images)
-
         for doc in docs:
             # Safely coerce page_number to a positive int
             raw_page = doc.meta_data.get("page_number")
@@ -3482,7 +3723,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 total = 9999
 
             doc_id = doc.content_id or doc.name or ""
-
+            if doc.meta_data.get("file_url") and self.page_image_storage:
+                doc.meta_data['file_url'] = self.page_image_storage.sign_url(
+                    doc.meta_data.get("file_url"), expires=7200
+                )
             if doc.meta_data.get("doc_type") == "page_image":
                 # Direct image hit — include exactly this page
                 pages_to_add = [page_num] if page_num is not None else []
@@ -3506,7 +3750,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                         image_refs.append((doc_id, p, resolved))
 
         # Sort by (doc_id, page_number) for consistent ordering
-        image_refs.sort(key=lambda x: (x[0], x[1]))
+        # image_refs.sort(key=lambda x: (x[0], x[1]))
         return [
             Image(url=r) if r.startswith("http") else Image(filepath=r)
             for _, _, r in image_refs[:max_images]

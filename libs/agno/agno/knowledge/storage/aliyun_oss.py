@@ -5,6 +5,7 @@ Requirements:
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 from agno.knowledge.storage.base import PageImageStorage
 from agno.utils.log import log_debug
@@ -52,10 +53,11 @@ class AliyunOSSStorage(PageImageStorage):
         # Fallback: strip query params and return last path component
         return base_url.split("?")[0].split("/", 3)[-1]
 
-    def upload(self, local_path: str, object_key: str) -> str:
+    def upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
         key = self._full_key(object_key)
-        log_debug(f"AliyunOSS upload: {local_path} -> {self.bucket_name}/{key}")
-        self._get_bucket().put_object_from_file(key, local_path)
+        ct = content_type or self._infer_content_type(local_path)
+        log_debug(f"AliyunOSS upload: {local_path} -> {self.bucket_name}/{key} (content-type: {ct})")
+        self._get_bucket().put_object_from_file(key, local_path, headers={"Content-Type": ct})
         return self._base_url(key)
 
     def sign_url(self, base_url: str, expires: int = 3600) -> str:

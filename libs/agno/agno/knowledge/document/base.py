@@ -19,6 +19,11 @@ class Document:
     content_id: Optional[str] = None
     content_origin: Optional[str] = None
     size: Optional[int] = None
+    # Transient field: local image path used only during embedding, never stored.
+    # Set by _upload_page_images() so the local file is available for embedding
+    # inside vector_db.insert() even though page_image_path has been removed from
+    # meta_data (preventing it from being persisted to the vector store).
+    local_embed_path: Optional[str] = field(default=None, repr=False, compare=False)
 
     def embed(self, embedder: Optional[Embedder] = None) -> None:
         """Embed the document using the provided embedder"""
@@ -29,9 +34,16 @@ class Document:
 
         # Image documents: embed using image embedding when available
         if self.meta_data.get("doc_type") == "page_image":
-            image_path = self.meta_data.get("page_image_path")
-            if image_path:
-                img_embedding, img_usage = _embedder.get_image_embedding_and_usage(image_path)
+            # Priority: transient local path (set during insert, no signing needed)
+            # → meta page_image_path (backward compat for callers not using storage)
+            # → OSS URL fallback (post-cleanup or re-embed scenarios)
+            image_ref = (
+                self.local_embed_path
+                or self.meta_data.get("page_image_url")
+                or self.meta_data.get("page_image_path")
+            )
+            if image_ref:
+                img_embedding, img_usage = _embedder.get_image_embedding_and_usage(image_ref)
                 if img_embedding is not None:
                     self.embedding = img_embedding
                     self.usage = img_usage
@@ -47,9 +59,14 @@ class Document:
 
         # Image documents: embed using image embedding when available
         if self.meta_data.get("doc_type") == "page_image":
-            image_path = self.meta_data.get("page_image_path")
-            if image_path:
-                img_embedding, img_usage = await _embedder.async_get_image_embedding_and_usage(image_path)
+            # Priority: transient local path → meta page_image_path → OSS URL
+            image_ref = (
+                self.local_embed_path
+                or self.meta_data.get("page_image_url")
+                or self.meta_data.get("page_image_path")
+            )
+            if image_ref:
+                img_embedding, img_usage = await _embedder.async_get_image_embedding_and_usage(image_ref)
                 if img_embedding is not None:
                     self.embedding = img_embedding
                     self.usage = img_usage

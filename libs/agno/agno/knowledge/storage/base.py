@@ -3,6 +3,7 @@
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -23,20 +24,34 @@ class PageImageStorage(ABC):
             access_key_secret="...",
         )
         url = storage.upload("/tmp/page_1.png", "docs/report/page_1.png")
-        signed = storage.sign_url(url, expires=3600)
+        signed = storage.sign_url(url, expires=7200)
     """
 
     @abstractmethod
-    def upload(self, local_path: str, object_key: str) -> str:
+    def upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
         """Upload a local file and return its permanent base URL (no signature).
 
         Args:
-            local_path: Path to the local PNG file.
+            local_path: Path to the local file.
             object_key: Key (path) inside the bucket, e.g. ``"docs/file/page_1.png"``.
+            content_type: Optional MIME type. If not provided, will be inferred from file extension.
 
         Returns:
             Permanent HTTPS URL without a signature.
         """
+
+    def _infer_content_type(self, file_path: str) -> str:
+        """Infer content type from file extension.
+
+        Args:
+            file_path: Path to the file.
+
+        Returns:
+            MIME type string.
+        """
+        from agno.knowledge.utils import get_content_type
+
+        return get_content_type(file_path)
 
     @abstractmethod
     def sign_url(self, base_url: str, expires: int = 3600) -> str:
@@ -50,9 +65,9 @@ class PageImageStorage(ABC):
             Pre-signed URL string.
         """
 
-    async def async_upload(self, local_path: str, object_key: str) -> str:
+    async def async_upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
         """Async wrapper around ``upload()``."""
-        return await asyncio.to_thread(self.upload, local_path, object_key)
+        return await asyncio.to_thread(self.upload, local_path, object_key, content_type)
 
     async def async_sign_url(self, base_url: str, expires: int = 3600) -> str:
         """Async wrapper around ``sign_url()``."""

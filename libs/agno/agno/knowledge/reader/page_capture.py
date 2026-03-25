@@ -51,6 +51,8 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
             if optimize:
+                # 转换为 P 模式（调色板），减少颜色数量
+                img = img.quantize(colors=256, method=Image.Quantize.LIBIMAGEQUANT)
                 # # 当前默认（推荐）
                 # dpi=150, optimize=True  # 平衡质量和体积
                 # # 高质量需求
@@ -61,7 +63,7 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
                     image_path,
                     "PNG",
                     optimize=True,
-                    compress_level=6,
+                    compress_level=9,
                 )
             else:
                 img.save(image_path, "PNG")

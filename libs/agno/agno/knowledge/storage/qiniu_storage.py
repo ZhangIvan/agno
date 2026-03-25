@@ -6,6 +6,7 @@ Requirements:
 
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 from agno.knowledge.storage.base import PageImageStorage
 from agno.utils.log import log_debug
@@ -53,16 +54,17 @@ class QiniuStorage(PageImageStorage):
             return base_url[len(domain) + 1:].split("?")[0]
         return base_url.split("?")[0].rsplit("/", 1)[-1]
 
-    def upload(self, local_path: str, object_key: str) -> str:
+    def upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
         try:
             from qiniu import put_file
         except ImportError:
             raise ImportError("`qiniu` not installed. Run: pip install qiniu")
         key = self._full_key(object_key)
-        log_debug(f"Qiniu upload: {local_path} -> {self.bucket_name}/{key}")
+        ct = content_type or self._infer_content_type(local_path)
+        log_debug(f"Qiniu upload: {local_path} -> {self.bucket_name}/{key} (content-type: {ct})")
         auth = self._get_auth()
         token = auth.upload_token(self.bucket_name, key)
-        ret, info = put_file(token, key, local_path)
+        ret, info = put_file(token, key, local_path, mime_type=ct)
         if info.status_code != 200:
             raise RuntimeError(f"Qiniu upload failed: {info}")
         return self._base_url(key)

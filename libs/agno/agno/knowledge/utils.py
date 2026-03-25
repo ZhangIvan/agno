@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agno.knowledge.reader.base import Reader
@@ -309,3 +310,77 @@ def get_all_chunkers_info() -> List[Dict]:
             log_debug(f"Skipping chunker '{key}': {e}")
             continue
     return chunkers_info
+
+
+# ==============================================================================
+# Content-Type Mapping
+# ==============================================================================
+
+CONTENT_TYPE_MAP: Dict[str, str] = {
+    # Images
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".bmp": "image/bmp",
+    # Documents
+    ".pdf": "application/pdf",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    # Data
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".xml": "application/xml",
+    ".yaml": "application/x-yaml",
+    ".yml": "application/x-yaml",
+    # Text
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".css": "text/css",
+    ".js": "application/javascript",
+    # Audio/Video
+    ".mp3": "audio/mpeg",
+    ".mp4": "video/mp4",
+    ".wav": "audio/wav",
+    ".webm": "video/webm",
+}
+
+
+def get_content_type(file_path: str) -> str:
+    """Get MIME content type by detecting file's actual content (magic bytes).
+
+    Uses python-magic to detect the real file type from content, not just extension.
+    Falls back to extension-based detection if python-magic is unavailable.
+
+    Args:
+        file_path: Path to the file.
+
+    Returns:
+        MIME type string, defaults to "application/octet-stream" if unknown.
+    """
+    # First, try to detect from file content using python-magic
+    try:
+        import magic
+
+        mime = magic.Magic(mime=True)
+        detected_type = mime.from_file(file_path)
+        if detected_type:
+            return detected_type
+    except ImportError:
+        log_debug("python-magic not installed, falling back to extension-based detection")
+    except Exception as e:
+        log_debug(f"Failed to detect content type from file content: {e}")
+
+    # Fallback: detect from file extension
+    ext = Path(file_path).suffix.lower()
+    return CONTENT_TYPE_MAP.get(ext, "application/octet-stream")

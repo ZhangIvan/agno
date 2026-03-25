@@ -25,7 +25,7 @@ class PPTXReader(Reader):
         chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(),
         capture_pages: bool = True,
         pages_cache_dir: Optional[str] = None,
-        image_dpi: int = 150,
+        image_dpi: int = 100,
         **kwargs,
     ):
         self.capture_pages = capture_pages

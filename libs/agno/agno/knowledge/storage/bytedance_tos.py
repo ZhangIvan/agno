@@ -5,6 +5,7 @@ Requirements:
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 from agno.knowledge.storage.base import PageImageStorage
 from agno.utils.log import log_debug
@@ -58,13 +59,13 @@ class ByteDanceTOSStorage(PageImageStorage):
             return base_url[len(prefix):].split("?")[0]
         return base_url.split("?")[0].split("/", 3)[-1]
 
-    def upload(self, local_path: str, object_key: str) -> str:
+    def upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
         key = self._full_key(object_key)
-        log_debug(f"ByteDanceTOS upload: {local_path} -> {self.bucket_name}/{key}")
+        ct = content_type or self._infer_content_type(local_path)
+        log_debug(f"ByteDanceTOS upload: {local_path} -> {self.bucket_name}/{key} (content-type: {ct})")
         client = self._get_client()
-        client.put_object_from_file(self.bucket_name, key, file_path=local_path)
-        # with open(local_path, "rb") as f:
-        #     client.put_object(self.bucket_name, key, content=f)
+        # TOS SDK put_object_from_file accepts headers parameter for content-type
+        client.put_object_from_file(self.bucket_name, key, file_path=local_path, content_type=ct)
         return self._base_url(key)
 
     def sign_url(self, base_url: str, expires: int = 3600) -> str:
