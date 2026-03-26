@@ -81,6 +81,10 @@ class Knowledge(RemoteKnowledge):
     verify_image_urls: bool = False
     # Timeout in seconds for the HEAD request when verify_image_urls is True.
     verify_image_url_timeout: float = 1.0
+    # --- URL signature settings ---
+    # Expiration time in seconds for signed URLs (default 7200 = 2 hours).
+    # Only applies when page_image_storage is configured for private buckets.
+    url_signature_expires: int = 7200
 
     def __post_init__(self):
         from agno.vectordb import VectorDb
@@ -3601,7 +3605,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = meta.get(url_field)
                 if url:
                     try:
-                        meta[url_field] = self.page_image_storage.sign_url(url, expires=7200)
+                        meta[url_field] = self.page_image_storage.sign_url(url, expires=self.url_signature_expires)
                     except Exception as e:
                         log_warning(f"sign_url failed for {url_field}={url}: {e}")
 
@@ -3625,7 +3629,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = meta.get(url_field)
                 if url:
                     try:
-                        meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=7200)
+                        meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
                     except Exception as e:
                         log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
 
@@ -3651,7 +3655,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     url = meta.get(url_field)
                     if url:
                         try:
-                            meta[url_field] = self.page_image_storage.sign_url(url, expires=7200)
+                            meta[url_field] = self.page_image_storage.sign_url(url, expires=self.url_signature_expires)
                         except Exception as e:
                             log_warning(f"sign_url failed for {url_field}={url}: {e}")
             signed.append(ref)
@@ -3672,7 +3676,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     url = meta.get(url_field)
                     if url:
                         try:
-                            meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=7200)
+                            meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
                         except Exception as e:
                             log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
             signed.append(ref)
@@ -3836,7 +3840,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = doc.meta_data.get("page_image_url")
                 if url:
                     try:
-                        return storage.sign_url(url, expires=7200)
+                        return storage.sign_url(url, expires=self.url_signature_expires)
                     except Exception as e:
                         log_warning(f"sign_url failed for {url}: {e}")
             # 2. Local: return path if file still exists
@@ -3855,7 +3859,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 cache_url = own_url.rsplit("/", 1)[0] + "/"
                 adj_url = f"{cache_url}page_{page_num}.png"
                 try:
-                    return storage.sign_url(adj_url, expires=7200)
+                    return storage.sign_url(adj_url, expires=self.url_signature_expires)
                 except Exception as e:
                     log_warning(f"sign_url failed for {adj_url}: {e}")
 
@@ -3950,7 +3954,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             doc_id = doc.content_id or doc.name or ""
             # if doc.meta_data.get("file_url") and self.page_image_storage:
             #     doc.meta_data['file_url'] = self.page_image_storage.sign_url(
-            #         doc.meta_data.get("file_url"), expires=7200
+            #         doc.meta_data.get("file_url"), expires=self.url_signature_expires
             #     )
             if doc.meta_data.get("doc_type") == "page_image":
                 # Direct image hit — include exactly this page
