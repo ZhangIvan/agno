@@ -106,6 +106,7 @@ class PageImageStorage(ABC):
             except Exception as e:
                 last_exception = e
                 if attempt < max_retries - 1:
+                    # Exponential backoff: backoff^attempt (e.g., 2^0=1s, 2^1=2s, 2^2=4s)
                     wait_time = backoff**attempt
                     log_warning(
                         f"Upload failed for {local_path} (attempt {attempt + 1}/{max_retries}): {e}. "

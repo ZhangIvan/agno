@@ -169,6 +169,45 @@ def wait_for_media_ready(url: str, timeout: int = 120, interval: int = 5, verbos
     return False
 
 
+async def async_wait_for_media_ready(url: str, timeout: int = 120, interval: int = 5, verbose: bool = True) -> bool:
+    """
+    Asynchronously wait for media to be ready at URL by polling with HEAD requests.
+
+    Args:
+        url (str): The URL to check for media availability
+        timeout (int): Maximum time to wait in seconds (default: 120)
+        interval (int): Seconds between each check (default: 5)
+        verbose (bool): Whether to print progress messages (default: True)
+
+    Returns:
+        bool: True if media is ready, False if timeout reached
+    """
+    max_attempts = timeout // interval
+    client = get_default_async_client()
+
+    if verbose:
+        log_info("Media generated! Waiting for upload to complete...")
+
+    for attempt in range(max_attempts):
+        try:
+            response = await client.head(url, timeout=10)
+            response.raise_for_status()
+            if verbose:
+                log_info(f"Media ready: {url}")
+            return True
+        except httpx.HTTPError:
+            pass
+
+        if verbose and (attempt + 1) % 3 == 0:
+            log_info(f"Still processing... ({(attempt + 1) * interval}s elapsed)")
+
+        await asyncio.sleep(interval)
+
+    if verbose:
+        log_warning(f"Timeout waiting for media. Try this URL later: {url}")
+    return False
+
+
 def download_knowledge_filters_sample_data(
     num_files: int = 5, file_extension: SampleDataFileExtension = SampleDataFileExtension.DOCX
 ) -> List[str]:
@@ -395,6 +434,10 @@ async def async_download_image(url: str, output_path: str, timeout: int = 30, ma
     client = get_default_async_client()
     backoff = 1.0
 
+    # Create directory once before retry loop
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     for attempt in range(max_retries):
         try:
             async with asyncio.timeout(timeout):
@@ -405,9 +448,6 @@ async def async_download_image(url: str, output_path: str, timeout: int = 30, ma
                 if not content_type or not content_type.startswith("image"):
                     log_warning(f"URL does not point to an image. Content-Type: {content_type}")
                     return False
-
-                path = Path(output_path)
-                path.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(output_path, "wb") as file:
                     async for chunk in response.aiter_bytes(chunk_size=8192):
@@ -452,14 +492,15 @@ async def async_download_audio(
     client = get_default_async_client()
     backoff = 1.0
 
+    # Create directory once before retry loop
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     for attempt in range(max_retries):
         try:
             async with asyncio.timeout(timeout):
                 response = await client.get(url)
                 response.raise_for_status()
-
-                path = Path(output_path)
-                path.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(output_path, "wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size=8192):
@@ -499,14 +540,15 @@ async def async_download_video(
     client = get_default_async_client()
     backoff = 1.0
 
+    # Create directory once before retry loop
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
     for attempt in range(max_retries):
         try:
             async with asyncio.timeout(timeout):
                 response = await client.get(url)
                 response.raise_for_status()
-
-                path = Path(output_path)
-                path.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(output_path, "wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size=8192):
@@ -550,14 +592,15 @@ async def async_download_file(
     backoff = 1.0
     last_exception: Optional[Exception] = None
 
+    # Create directory once before retry loop
+    output_file = Path(output_path)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
     for attempt in range(max_retries):
         try:
             async with asyncio.timeout(timeout):
                 response = await client.get(url)
                 response.raise_for_status()
-
-                output_file = Path(output_path)
-                output_file.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(output_file, "wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size=8192):
