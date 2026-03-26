@@ -506,9 +506,22 @@ class PgVector(VectorDb):
             raise
 
     def _get_document_record(
-        self, doc: Document, filters: Optional[Dict[str, Any]] = None, content_hash: str = ""
+        self, doc: Document, filters: Optional[Dict[str, Any]] = None, content_hash: str = "",
+        max_retries: int = 3, retry_base_delay: float = 0.5,
     ) -> Dict[str, Any]:
-        doc.embed(embedder=self.embedder)
+        import time as _time
+
+        for attempt in range(max_retries + 1):
+            try:
+                doc.embed(embedder=self.embedder)
+                break
+            except Exception as e:
+                if attempt == max_retries:
+                    log_error(f"Embedding failed after {max_retries} retries for '{doc.name}': {e}")
+                    raise
+                delay = min(retry_base_delay * (2 ** attempt), 10)
+                log_warning(f"Embedding retry {attempt + 1}/{max_retries} for '{doc.name}': {e}")
+                _time.sleep(delay)
         cleaned_content = self._clean_content(doc.content)
         # Include content_hash in ID to ensure uniqueness across different content hashes
         # This allows the same URL/content to be inserted with different descriptions
@@ -531,75 +544,112 @@ class PgVector(VectorDb):
             "content_id": doc.content_id,
         }
 
-    async def _async_embed_documents(self, batch_docs: List[Document]) -> None:
-        """
-        Embed a batch of documents using either batch embedding or individual embedding.
-
-        Args:
-            batch_docs: List of documents to embed
-        """
-        if self.embedder.enable_batch and hasattr(self.embedder, "async_get_embeddings_batch_and_usage"):
-            # Use batch embedding when enabled and supported
+    async def _async_embed_one_with_retry(
+        self,
+        doc: Document,
+        max_retries: int = 3,
+        base_delay: float = 0.5,
+    ) -> None:
+        """Embed a single document with exponential-backoff retry."""
+        for attempt in range(max_retries + 1):
             try:
-                # Extract content from all documents
-                doc_contents = [doc.content for doc in batch_docs]
-
-                # Get batch embeddings and usage
-                embeddings, usages = await self.embedder.async_get_embeddings_batch_and_usage(doc_contents)
-
-                # Process documents with pre-computed embeddings
-                for j, doc in enumerate(batch_docs):
-                    try:
-                        if j < len(embeddings):
-                            doc.embedding = embeddings[j]
-                            doc.usage = usages[j] if j < len(usages) else None
-                    except Exception as e:
-                        log_error(f"Error assigning batch embedding to document '{doc.name}': {e}")
-
+                await doc.async_embed(embedder=self.embedder)
+                return
             except Exception as e:
-                # Check if this is a rate limit error - don't fall back as it would make things worse
                 error_str = str(e).lower()
                 is_rate_limit = any(
                     phrase in error_str
                     for phrase in ["rate limit", "too many requests", "429", "trial key", "api calls / minute"]
                 )
-
                 if is_rate_limit:
-                    log_error(f"Rate limit detected during batch embedding.  {e}")
-                    raise e
+                    # Rate limit: backoff and retry
+                    if attempt == max_retries:
+                        log_error(f"Embedding rate-limited after {max_retries} retries for '{doc.name}': {e}")
+                        raise
+                    delay = min(base_delay * (2 ** attempt), 30)
+                    log_warning(f"Embedding rate-limited, retry {attempt + 1}/{max_retries} for '{doc.name}' in {delay}s")
+                    await asyncio.sleep(delay)
+                elif attempt < max_retries:
+                    delay = min(base_delay * (2 ** attempt), 10)
+                    log_warning(f"Embedding retry {attempt + 1}/{max_retries} for '{doc.name}': {e}")
+                    await asyncio.sleep(delay)
                 else:
-                    log_warning(f"Async batch embedding failed, falling back to individual embeddings: {e}")
-                    # Fall back to individual embedding
-                    embed_tasks = [doc.async_embed(embedder=self.embedder) for doc in batch_docs]
-                    results = await asyncio.gather(*embed_tasks, return_exceptions=True)
-
-                    # Check for exceptions and handle them
-                    for i, result in enumerate(results):
-                        if isinstance(result, Exception):
-                            error_msg = str(result)
-                            # If it's an event loop closure error, log it but don't fail
-                            if "Event loop is closed" in error_msg or "RuntimeError" in type(result).__name__:
-                                log_warning(
-                                    f"Event loop closure during embedding for document {i}, but operation may have succeeded: {result}"
-                                )
-                            else:
-                                log_error(f"Error embedding document {i}: {result}")
-        else:
-            # Use individual embedding
-            embed_tasks = [doc.async_embed(embedder=self.embedder) for doc in batch_docs]
-            results = await asyncio.gather(*embed_tasks, return_exceptions=True)
-
-            # Check for exceptions and handle them
-            for i, result in enumerate(results):
-                if isinstance(result, Exception):
-                    error_msg = str(result)
-                    # If it's an event loop closure error, log it but don't fail
-                    if "Event loop is closed" in error_msg or "RuntimeError" in type(result).__name__:
+                    error_msg = str(e)
+                    if "Event loop is closed" in error_msg or "RuntimeError" in type(e).__name__:
                         log_warning(
-                            f"Event loop closure during embedding for document {i}, but operation may have succeeded: {result}"
+                            f"Event loop closure during embedding for '{doc.name}', "
+                            f"but operation may have succeeded: {e}"
                         )
                     else:
-                        log_error(f"Error embedding document {i}: {result}")
+                        log_error(f"Embedding failed after {max_retries} retries for '{doc.name}': {e}")
+
+    async def _async_embed_documents(
+        self,
+        batch_docs: List[Document],
+        embed_concurrency: int = 10,
+        embed_max_retries: int = 3,
+        embed_retry_base_delay: float = 0.5,
+    ) -> None:
+        """Embed a batch of documents using batch or concurrent individual embedding.
+
+        Separates text documents from image (page_image) documents:
+        - Text documents use batch embedding when supported, falling back to
+          concurrent individual embedding.
+        - Image documents always use concurrent individual embedding since
+          batch image-embedding APIs are uncommon.
+
+        Both paths use a semaphore for concurrency control and exponential-backoff
+        retry for transient failures.
+
+        Args:
+            batch_docs: List of documents to embed.
+            embed_concurrency: Maximum number of concurrent embedding calls.
+            embed_max_retries: Maximum retry attempts per document on failure.
+            embed_retry_base_delay: Base delay in seconds for exponential backoff.
+        """
+        # Separate image docs from text docs
+        image_docs = [d for d in batch_docs if d.meta_data.get("doc_type") == "page_image"]
+        text_docs = [d for d in batch_docs if d.meta_data.get("doc_type") != "page_image"]
+
+        semaphore = asyncio.Semaphore(embed_concurrency)
+
+        async def _embed_with_semaphore(doc: Document) -> None:
+            async with semaphore:
+                await self._async_embed_one_with_retry(doc, embed_max_retries, embed_retry_base_delay)
+
+        # --- Text documents: try batch API first ---
+        if text_docs:
+            text_embedded = False
+            if self.embedder.enable_batch and hasattr(self.embedder, "async_get_embeddings_batch_and_usage"):
+                try:
+                    doc_contents = [doc.content for doc in text_docs]
+                    embeddings, usages = await self.embedder.async_get_embeddings_batch_and_usage(doc_contents)
+                    for j, doc in enumerate(text_docs):
+                        try:
+                            if j < len(embeddings):
+                                doc.embedding = embeddings[j]
+                                doc.usage = usages[j] if j < len(usages) else None
+                        except Exception as e:
+                            log_error(f"Error assigning batch embedding to document '{doc.name}': {e}")
+                    text_embedded = True
+                except Exception as e:
+                    error_str = str(e).lower()
+                    is_rate_limit = any(
+                        phrase in error_str
+                        for phrase in ["rate limit", "too many requests", "429", "trial key", "api calls / minute"]
+                    )
+                    if is_rate_limit:
+                        log_error(f"Rate limit detected during batch embedding. {e}")
+                        raise
+                    log_warning(f"Async batch embedding failed, falling back to individual embeddings: {e}")
+
+            if not text_embedded:
+                # Concurrent individual embedding with retry
+                await asyncio.gather(*[_embed_with_semaphore(doc) for doc in text_docs])
+
+        # --- Image documents: concurrent individual embedding with retry ---
+        if image_docs:
+            await asyncio.gather(*[_embed_with_semaphore(doc) for doc in image_docs])
 
     async def async_upsert(
         self,

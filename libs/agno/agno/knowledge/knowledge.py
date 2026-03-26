@@ -67,6 +67,20 @@ class Knowledge(RemoteKnowledge):
     # When set, page PNGs are uploaded at insert time and signed URLs are returned
     # at retrieval time instead of local file paths.
     page_image_storage: Optional[Any] = None  # PageImageStorage instance
+    # --- Upload settings ---
+    # Maximum number of concurrent image uploads (async path only).
+    upload_concurrency: int = 10
+    # Maximum retry attempts per upload on transient failures.
+    upload_max_retries: int = 3
+    # Base delay in seconds for exponential backoff between retries.
+    upload_retry_base_delay: float = 0.5
+    # --- Image URL verification ---
+    # When True, perform a lightweight HEAD request to verify image URLs are
+    # accessible before passing them to the LLM.  Default is False since
+    # invalid URLs are rare and the check adds latency.
+    verify_image_urls: bool = False
+    # Timeout in seconds for the HEAD request when verify_image_urls is True.
+    verify_image_url_timeout: float = 1.0
 
     def __post_init__(self):
         from agno.vectordb import VectorDb
@@ -3398,8 +3412,24 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             content_id = doc.content_id or doc.name or ""
             img_suffix = os.path.splitext(local_path)[1] or ".webp"
             object_key = f"{content_id}/page_{page_num}{img_suffix}"
-            try:
-                url = self.page_image_storage.upload(local_path, object_key)
+            url: Optional[str] = None
+            for attempt in range(self.upload_max_retries + 1):
+                try:
+                    url = self.page_image_storage.upload(local_path, object_key)
+                    break
+                except Exception as e:
+                    if attempt == self.upload_max_retries:
+                        log_warning(
+                            f"PageImageStorage.upload failed after {self.upload_max_retries} retries "
+                            f"for {local_path}: {e}"
+                        )
+                    else:
+                        import time as _time
+
+                        delay = min(self.upload_retry_base_delay * (2 ** attempt), 10)
+                        log_warning(f"Upload retry {attempt + 1}/{self.upload_max_retries} for {local_path}: {e}")
+                        _time.sleep(delay)
+            if url:
                 doc.meta_data["page_image_url"] = url
                 # Move local path out of meta (won't be stored in vector DB) into
                 # the transient embed field so embed() can still find it.
@@ -3410,8 +3440,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 page_url_map[page_num] = url
                 if is_cache_file:
                     local_paths.append(local_path)
-            except Exception as e:
-                log_warning(f"PageImageStorage.upload failed for {local_path}: {e}")
 
         # Phase 2: propagate url info to text_chunk docs with matching page_number
         if page_url_map:
@@ -3428,16 +3456,19 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         return docs, local_paths
 
     async def _async_upload_page_images(self, docs: List[Document]) -> Tuple[List[Document], List[str]]:
-        """Async version of ``_upload_page_images``."""
+        """Async version of ``_upload_page_images``.
+
+        Uses concurrent uploads with a semaphore to limit parallelism and
+        exponential-backoff retry for transient failures.
+        """
+        import asyncio
         import os
 
         if not self.page_image_storage:
             return docs, []
 
-        page_url_map: Dict[int, str] = {}
-        local_paths: List[str] = []
-
-        # Phase 1: upload any doc that carries a page_image_path and build url map.
+        # Collect upload tasks
+        upload_items: List[Tuple[Document, str, int, bool, str]] = []
         for doc in docs:
             local_path = doc.meta_data.get("page_image_path")
             if not local_path:
@@ -3449,18 +3480,57 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             content_id = doc.content_id or doc.name or ""
             img_suffix = os.path.splitext(local_path)[1] or ".webp"
             object_key = f"{content_id}/page_{page_num}{img_suffix}"
-            try:
-                url = await self.page_image_storage.async_upload(local_path, object_key)
-                doc.meta_data["page_image_url"] = url
-                doc.local_embed_path = local_path
-                doc.meta_data.pop("page_image_path", None)
-                doc.meta_data.pop("pages_cache_dir", None)
-                doc.meta_data.pop("pages_cache_url", None)
-                page_url_map[page_num] = url
-                if is_cache_file:
-                    local_paths.append(local_path)
-            except Exception as e:
-                log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
+            upload_items.append((doc, local_path, page_num, is_cache_file, object_key))
+
+        if not upload_items:
+            return docs, []
+
+        semaphore = asyncio.Semaphore(self.upload_concurrency)
+        max_retries = self.upload_max_retries
+        base_delay = self.upload_retry_base_delay
+        storage = self.page_image_storage
+
+        async def _upload_one(
+            doc: Document, local_path: str, page_num: int, is_cache_file: bool, object_key: str
+        ) -> Optional[Tuple[Document, int, str, Optional[str]]]:
+            async with semaphore:
+                for attempt in range(max_retries + 1):
+                    try:
+                        url = await storage.async_upload(local_path, object_key)
+                        return (doc, page_num, url, local_path if is_cache_file else None)
+                    except Exception as e:
+                        if attempt == max_retries:
+                            log_warning(
+                                f"PageImageStorage.async_upload failed after {max_retries} retries "
+                                f"for {local_path}: {e}"
+                            )
+                            return None
+                        delay = min(base_delay * (2 ** attempt), 10)
+                        log_warning(
+                            f"Upload retry {attempt + 1}/{max_retries} for {local_path}: {e}"
+                        )
+                        await asyncio.sleep(delay)
+            return None  # pragma: no cover
+
+        # Phase 1: concurrent uploads with retry
+        results = await asyncio.gather(
+            *[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items]
+        )
+
+        page_url_map: Dict[int, str] = {}
+        local_paths: List[str] = []
+        for result in results:
+            if result is None:
+                continue
+            doc, page_num, url, cache_path = result
+            doc.meta_data["page_image_url"] = url
+            doc.local_embed_path = doc.meta_data.get("page_image_path")
+            doc.meta_data.pop("page_image_path", None)
+            doc.meta_data.pop("pages_cache_dir", None)
+            doc.meta_data.pop("pages_cache_url", None)
+            page_url_map[page_num] = url
+            if cache_path:
+                local_paths.append(cache_path)
 
         # Phase 2: propagate url info to text_chunk docs with matching page_number
         if page_url_map:
@@ -3560,6 +3630,109 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                         log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
 
         return result
+
+    def _sign_reference_urls(self, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Sign storage URLs in reference dicts for time-limited access.
+
+        Takes a list of reference dicts (as returned by ``_doc_to_reference_dict``)
+        and returns a new list with ``page_image_url`` and ``file_url`` fields signed.
+        The input list is not mutated.
+        """
+        if not self.page_image_storage:
+            return references
+        signed: List[Dict[str, Any]] = []
+        for ref in references:
+            ref = dict(ref)
+            meta = ref.get("meta_data")
+            if isinstance(meta, dict):
+                meta = dict(meta)
+                ref["meta_data"] = meta
+                for url_field in ("page_image_url", "file_url"):
+                    url = meta.get(url_field)
+                    if url:
+                        try:
+                            meta[url_field] = self.page_image_storage.sign_url(url, expires=7200)
+                        except Exception as e:
+                            log_warning(f"sign_url failed for {url_field}={url}: {e}")
+            signed.append(ref)
+        return signed
+
+    async def _async_sign_reference_urls(self, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Async version of ``_sign_reference_urls``."""
+        if not self.page_image_storage:
+            return references
+        signed: List[Dict[str, Any]] = []
+        for ref in references:
+            ref = dict(ref)
+            meta = ref.get("meta_data")
+            if isinstance(meta, dict):
+                meta = dict(meta)
+                ref["meta_data"] = meta
+                for url_field in ("page_image_url", "file_url"):
+                    url = meta.get(url_field)
+                    if url:
+                        try:
+                            meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=7200)
+                        except Exception as e:
+                            log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
+            signed.append(ref)
+        return signed
+
+    @staticmethod
+    def _strip_url_signature(url: str) -> str:
+        """Strip query-string signature from an OSS/cloud storage URL.
+
+        Returns the base URL without query parameters.  Non-http URLs and
+        URLs without query strings are returned unchanged.
+        """
+        if not url or not url.startswith(("http://", "https://")):
+            return url
+        return url.split("?")[0]
+
+    @staticmethod
+    def _strip_reference_url_signatures(
+        references: List["MessageReferences"],
+    ) -> List["MessageReferences"]:
+        """Return a copy of *references* with OSS URL signatures stripped.
+
+        Each ``page_image_url`` and ``file_url`` in ``meta_data`` is reduced to
+        its base URL (query string removed).  The original objects are not mutated.
+        """
+        from agno.models.message import MessageReferences as MR
+
+        stripped: List[MR] = []
+        for ref_group in references:
+            if not ref_group.references:
+                stripped.append(ref_group)
+                continue
+            new_refs = []
+            for ref in ref_group.references:
+                if not isinstance(ref, dict):
+                    new_refs.append(ref)
+                    continue
+                meta = ref.get("meta_data")
+                if not isinstance(meta, dict):
+                    new_refs.append(ref)
+                    continue
+                needs_strip = False
+                for url_field in ("page_image_url", "file_url"):
+                    url = meta.get(url_field)
+                    if url and "?" in url:
+                        needs_strip = True
+                        break
+                if not needs_strip:
+                    new_refs.append(ref)
+                    continue
+                ref = dict(ref)
+                meta = dict(meta)
+                ref["meta_data"] = meta
+                for url_field in ("page_image_url", "file_url"):
+                    url = meta.get(url_field)
+                    if url:
+                        meta[url_field] = Knowledge._strip_url_signature(url)
+                new_refs.append(ref)
+            stripped.append(MR(query=ref_group.query, references=new_refs, time=ref_group.time))
+        return stripped
 
     def _upload_original_file(
         self,
@@ -3706,6 +3879,35 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
     def _resolve_page_image_path(self, doc: Document, page_num: int) -> Optional[str]:
         return self._resolve_page_image(doc, page_num)
 
+    def _check_url_accessible(self, url: str) -> bool:
+        """Perform a lightweight HEAD request to verify a URL is reachable.
+
+        Only checks http/https URLs.  Returns True for local paths, base64, etc.
+        """
+        if not url.startswith(("http://", "https://")):
+            return True
+        try:
+            import httpx
+
+            with httpx.Client(timeout=self.verify_image_url_timeout) as client:
+                resp = client.head(url, follow_redirects=True)
+                return resp.status_code < 400
+        except Exception:
+            return False
+
+    async def _async_check_url_accessible(self, url: str) -> bool:
+        """Async version of ``_check_url_accessible``."""
+        if not url.startswith(("http://", "https://")):
+            return True
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=self.verify_image_url_timeout) as client:
+                resp = await client.head(url, follow_redirects=True)
+                return resp.status_code < 400
+        except Exception:
+            return False
+
     def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
         """Collect page images for retrieved documents.
 
@@ -3769,6 +3971,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 if key not in seen:
                     resolved = self._resolve_page_image(doc, p)
                     if resolved:
+                        if self.verify_image_urls and resolved.startswith("http"):
+                            if not self._check_url_accessible(resolved):
+                                log_warning(f"Skipping unreachable image URL: {resolved}")
+                                continue
                         seen.add(key)
                         image_refs.append((doc_id, p, resolved))
 

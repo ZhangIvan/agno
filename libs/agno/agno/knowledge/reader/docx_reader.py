@@ -111,6 +111,7 @@ class DocxReader(Reader):
                             doc.meta_data["doc_type"] = "text_chunk"
                             if approx_page in page_images:
                                 doc.meta_data["page_image_path"] = page_images[approx_page]
+                                doc.meta_data["pages_cache_dir"] = cache_dir
 
                     # Append image documents for multimodal embedding
                     for page_num, image_path in page_images.items():
@@ -124,6 +125,7 @@ class DocxReader(Reader):
                                     "page_number": page_num,
                                     "total_pages": total_pages,
                                     "page_image_path": image_path,
+                                    "pages_cache_dir": cache_dir,
                                 },
                                 content_id=f"{doc_name}_page_{page_num}",
                             )

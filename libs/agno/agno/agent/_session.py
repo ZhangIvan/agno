@@ -134,6 +134,10 @@ def get_session(
                 ),  # type: ignore[arg-type]
             )
 
+        # Re-sign OSS URLs in loaded session references
+        if loaded_session is not None:
+            _re_sign_urls_in_session(agent, loaded_session)
+
         # Cache the session if relevant
         if loaded_session is not None and agent.cache_session:
             agent._cached_session = loaded_session  # type: ignore
@@ -203,6 +207,10 @@ async def aget_session(
                 ),  # type: ignore[arg-type]
             )
 
+        # Re-sign OSS URLs in loaded session references
+        if loaded_session is not None:
+            await _async_re_sign_urls_in_session(agent, loaded_session)
+
         # Cache the session if relevant
         if loaded_session is not None and agent.cache_session:
             agent._cached_session = loaded_session  # type: ignore
@@ -211,6 +219,76 @@ async def aget_session(
 
     log_debug(f"AgentSession {session_id_to_load} not found in db")
     return None
+
+
+def _strip_signed_urls_from_session(agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]) -> None:
+    """Strip OSS URL signatures from run references before persisting to DB.
+
+    Signed URLs contain time-limited query parameters that expire.  Storing
+    only the base URL ensures that references remain valid when re-signed
+    on load.  Modifies the session's ``runs`` in-place.
+    """
+    knowledge = getattr(agent, "knowledge", None)
+    if knowledge is None or not getattr(knowledge, "page_image_storage", None):
+        return
+    strip_fn = getattr(knowledge, "_strip_reference_url_signatures", None)
+    if not callable(strip_fn):
+        return
+    runs = getattr(session, "runs", None)
+    if not runs:
+        return
+    for run in runs:
+        refs = getattr(run, "references", None)
+        if refs:
+            run.references = strip_fn(refs)
+
+
+def _re_sign_urls_in_session(
+    agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]
+) -> None:
+    """Re-sign OSS URLs in run references after loading from DB.
+
+    The stored references contain unsigned base URLs; this restores
+    time-limited signed URLs so callers receive working links.
+    """
+    knowledge = getattr(agent, "knowledge", None)
+    if knowledge is None or not getattr(knowledge, "page_image_storage", None):
+        return
+    sign_fn = getattr(knowledge, "_sign_reference_urls", None)
+    if not callable(sign_fn):
+        return
+    runs = getattr(session, "runs", None)
+    if not runs:
+        return
+    for run in runs:
+        refs = getattr(run, "references", None)
+        if not refs:
+            continue
+        for ref_group in refs:
+            if ref_group.references:
+                ref_group.references = sign_fn(ref_group.references)
+
+
+async def _async_re_sign_urls_in_session(
+    agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]
+) -> None:
+    """Async version of ``_re_sign_urls_in_session``."""
+    knowledge = getattr(agent, "knowledge", None)
+    if knowledge is None or not getattr(knowledge, "page_image_storage", None):
+        return
+    sign_fn = getattr(knowledge, "_async_sign_reference_urls", None)
+    if not callable(sign_fn):
+        return
+    runs = getattr(session, "runs", None)
+    if not runs:
+        return
+    for run in runs:
+        refs = getattr(run, "references", None)
+        if not refs:
+            continue
+        for ref_group in refs:
+            if ref_group.references:
+                ref_group.references = await sign_fn(ref_group.references)
 
 
 def save_session(agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]) -> None:
@@ -233,6 +311,8 @@ def save_session(agent: Agent, session: Union[AgentSession, TeamSession, Workflo
             session.session_data["session_state"].pop("current_user_id", None)
             session.session_data["session_state"].pop("current_run_id", None)
 
+        # Strip signed URLs before persisting so only base URLs are stored
+        _strip_signed_urls_from_session(agent, session)
         _storage.upsert_session(agent, session=session)
         log_debug(f"Created or updated AgentSession record: {session.session_id}")
 
@@ -254,6 +334,8 @@ async def asave_session(agent: Agent, session: Union[AgentSession, TeamSession, 
             session.session_data["session_state"].pop("current_session_id", None)
             session.session_data["session_state"].pop("current_user_id", None)
             session.session_data["session_state"].pop("current_run_id", None)
+        # Strip signed URLs before persisting so only base URLs are stored
+        _strip_signed_urls_from_session(agent, session)
         if _init.has_async_db(agent):
             await _storage.aupsert_session(agent, session=session)
         else:
