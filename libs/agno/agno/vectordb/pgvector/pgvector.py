@@ -547,7 +547,7 @@ class PgVector(VectorDb):
     async def _async_embed_one_with_retry(
         self,
         doc: Document,
-        max_retries: int = 3,
+        max_retries: int = 5,
         base_delay: float = 0.5,
     ) -> None:
         """Embed a single document with exponential-backoff retry."""
@@ -586,8 +586,8 @@ class PgVector(VectorDb):
     async def _async_embed_documents(
         self,
         batch_docs: List[Document],
-        embed_concurrency: int = 10,
-        embed_max_retries: int = 3,
+        embed_concurrency: int = 5,
+        embed_max_retries: int = 5,
         embed_retry_base_delay: float = 0.5,
     ) -> None:
         """Embed a batch of documents using batch or concurrent individual embedding.
