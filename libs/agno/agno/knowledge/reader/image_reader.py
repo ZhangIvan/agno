@@ -8,8 +8,6 @@ from agno.knowledge.reader.base import Reader
 from agno.knowledge.types import ContentType
 from agno.utils.log import log_debug, log_warning
 
-SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"}
-
 
 class ImageReader(Reader):
     """Reader for direct image file uploads.
@@ -73,9 +71,12 @@ class ImageReader(Reader):
                 src.seek(0)
 
         img.save(
-            cache_path, "WEBP", quality=webp_quality, method=4,
+            cache_path,
+            "WEBP",
+            quality=webp_quality,
+            method=4,
             lossless=False,  # 有损 = 体积暴减
-            optimize=True  # 额外优化文件大小
+            optimize=True,  # 额外优化文件大小
         )
         return cache_path, cache_dir
 
@@ -99,7 +100,7 @@ class ImageReader(Reader):
                 cache_path, cache_dir = self._to_webp(str(file), doc_name)
             else:
                 raw_name = name or getattr(file, "name", "image.png")
-                base = os.path.basename(raw_name)
+                base = os.path.basename(str(raw_name))
                 doc_name = base.rsplit(".", 1)[0] if "." in base else base
                 cache_path, cache_dir = self._to_webp(file, doc_name)
 

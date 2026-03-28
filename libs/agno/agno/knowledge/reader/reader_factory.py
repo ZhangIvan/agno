@@ -2,6 +2,7 @@ import os
 from typing import Any, Callable, Dict, List, Optional
 
 from agno.knowledge.reader.base import Reader
+from agno.knowledge.types import SUPPORTED_IMAGE_EXTENSIONS
 
 
 class ReaderFactory:
@@ -388,7 +389,7 @@ class ReaderFactory:
             return cls.create_reader("markdown")
         elif extension in [".txt", ".text"]:
             return cls.create_reader("text")
-        elif extension in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]:
+        elif extension in SUPPORTED_IMAGE_EXTENSIONS:
             return cls.create_reader("image")
         else:
             # Default to text reader for unknown extensions

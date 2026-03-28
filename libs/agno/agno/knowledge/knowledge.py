@@ -1,7 +1,8 @@
-import logging
 import asyncio
 import hashlib
 import io
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -9,6 +10,12 @@ from io import BytesIO
 from os.path import basename
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
+from urllib.parse import urlparse
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agno.tools.function import ToolResult
 
 from httpx import AsyncClient
 
@@ -23,7 +30,8 @@ from agno.knowledge.remote_content.remote_content import (
     RemoteContent,
 )
 from agno.knowledge.remote_knowledge import RemoteKnowledge
-from agno.knowledge.utils import merge_user_metadata, set_agno_metadata, strip_agno_metadata
+from agno.knowledge.utils import MIME_TO_EXTENSION, merge_user_metadata, set_agno_metadata, strip_agno_metadata
+from agno.knowledge.types import SUPPORTED_IMAGE_EXTENSIONS, PageImageStorage
 from agno.utils.http import async_fetch_with_retry
 from agno.utils.log import log_debug, log_error, log_info, log_warning
 from agno.utils.string import generate_id
@@ -66,7 +74,7 @@ class Knowledge(RemoteKnowledge):
     # Optional OSS/cloud storage backend for page images.
     # When set, page PNGs are uploaded at insert time and signed URLs are returned
     # at retrieval time instead of local file paths.
-    page_image_storage: Optional[Any] = None  # PageImageStorage instance
+    page_image_storage: Optional[PageImageStorage] = None  # PageImageStorage instance
     # --- Upload settings ---
     # Maximum number of concurrent image uploads (async path only).
     upload_concurrency: int = 10
@@ -1012,7 +1020,6 @@ class Knowledge(RemoteKnowledge):
             bool: True if file should be included, False otherwise
         """
         import fnmatch
-        import os
 
         file_name = os.path.basename(file_path)
 
@@ -1189,6 +1196,32 @@ class Knowledge(RemoteKnowledge):
 
         return False
 
+    @staticmethod
+    def _detect_extension_from_content_type(url: str) -> Optional[str]:
+        """HEAD request to detect Content-Type, return inferred extension or None."""
+        try:
+            import httpx
+
+            with httpx.Client(follow_redirects=True, timeout=10) as client:
+                resp = client.head(url)
+                content_type = resp.headers.get("content-type", "")
+                mime = content_type.split(";")[0].strip().lower()
+                return MIME_TO_EXTENSION.get(mime)
+        except Exception:
+            return None
+
+    @staticmethod
+    async def _async_detect_extension_from_content_type(url: str) -> Optional[str]:
+        """Async HEAD request to detect Content-Type."""
+        try:
+            async with AsyncClient(follow_redirects=True, timeout=10) as client:
+                resp = await client.head(url)
+                content_type = resp.headers.get("content-type", "")
+                mime = content_type.split(";")[0].strip().lower()
+                return MIME_TO_EXTENSION.get(mime)
+        except Exception:
+            return None
+
     def _select_reader_by_extension(
         self, file_extension: str, provided_reader: Optional[Reader] = None
     ) -> Tuple[Optional[Reader], str]:
@@ -1220,7 +1253,7 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader, ""
         elif file_extension in [".xlsx", ".xls"]:
             return self.excel_reader, ""
-        elif file_extension in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]:
+        elif file_extension in SUPPORTED_IMAGE_EXTENSIONS:
             return self.image_reader, ""
         else:
             return self.text_reader, ""
@@ -1254,7 +1287,7 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader
         elif uri_lower.endswith(".xlsx") or uri_lower.endswith(".xls"):
             return self.excel_reader
-        elif any(uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]):
+        elif any(uri_lower.endswith(ext) for ext in SUPPORTED_IMAGE_EXTENSIONS):
             return self.image_reader
         else:
             return self.text_reader
@@ -1572,8 +1605,6 @@ class Knowledge(RemoteKnowledge):
 
         # Set name from URL if not provided
         if not content.name and content.url:
-            from urllib.parse import urlparse
-
             parsed = urlparse(content.url)
             url_path = Path(parsed.path)
             content.name = url_path.name if url_path.name else content.url
@@ -1591,8 +1622,6 @@ class Knowledge(RemoteKnowledge):
 
         # 2. Validate URL
         try:
-            from urllib.parse import urlparse
-
             parsed_url = urlparse(content.url)
             if not all([parsed_url.scheme, parsed_url.netloc]):
                 content.status = ContentStatus.FAILED
@@ -1608,11 +1637,21 @@ class Knowledge(RemoteKnowledge):
         url_path = Path(parsed_url.path)
         file_extension = url_path.suffix.lower()
 
-        bytes_content = None
+        # If URL has no extension, try to detect from Content-Type via HEAD request
+        if not file_extension:
+            file_extension = await self._async_detect_extension_from_content_type(content.url) or ""
+
+        # Download to a temp file on disk instead of BytesIO (memory) so that
+        # large files don't exhaust memory.  The temp file is cleaned up at the
+        # end of this method.
+        temp_file_path: Optional[Path] = None
         if file_extension:
             async with AsyncClient() as client:
                 response = await async_fetch_with_retry(content.url, client=client)
-            bytes_content = BytesIO(response.content)
+            with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp:
+                tmp.write(response.content)
+                temp_file_path = Path(tmp.name)
+            del response  # free the response body buffer
 
         # 4. Select reader
         name = content.name if content.name else content.url
@@ -1631,10 +1670,16 @@ class Knowledge(RemoteKnowledge):
                     read_documents = await reader.async_read(content.url, name=name)
                 else:
                     password = content.auth.password if content.auth and content.auth.password is not None else None
-                    source = bytes_content if bytes_content else content.url
+                    source = temp_file_path if temp_file_path else content.url
                     read_documents = await self._aread(reader, source, name=name, password=password)
 
         except Exception as e:
+            # Clean up temp file on read failure
+            if temp_file_path:
+                try:
+                    os.unlink(temp_file_path)
+                except OSError:
+                    pass
             log_error(f"Error reading URL: {content.url} - {str(e)}")
             content.status = ContentStatus.FAILED
             content.status_message = f"Error reading URL: {content.url} - {str(e)}"
@@ -1668,19 +1713,32 @@ class Knowledge(RemoteKnowledge):
                 doc_id = generate_id(doc_hash)
                 self._prepare_documents_for_insert(source_docs, doc_id, calculate_sizes=True)
 
+                # Upload page images for this source group
+                local_page_paths: List[str] = []
+                if self.page_image_storage:
+                    source_docs, local_page_paths = await self._async_upload_page_images(source_docs)
+
                 # Insert with per-document hash
                 if self.vector_db.upsert_available() and upsert:
                     try:
                         await self.vector_db.async_upsert(doc_hash, source_docs, content.metadata)
                     except Exception as e:
                         log_error(f"Error upserting document from {source_url}: {e}")
+                        if local_page_paths:
+                            self._cleanup_local_page_images(source_docs, local_page_paths)
                         continue
                 else:
                     try:
                         await self.vector_db.async_insert(doc_hash, documents=source_docs, filters=content.metadata)
                     except Exception as e:
                         log_error(f"Error inserting document from {source_url}: {e}")
+                        if local_page_paths:
+                            self._cleanup_local_page_images(source_docs, local_page_paths)
                         continue
+
+                # Cleanup temp files after successful insert
+                if local_page_paths:
+                    self._cleanup_local_page_images(source_docs, local_page_paths)
 
             content.status = ContentStatus.COMPLETED
             await self._aupdate_content(content)
@@ -1690,7 +1748,17 @@ class Knowledge(RemoteKnowledge):
         if not content.id:
             content.id = generate_id(content.content_hash or "")
         self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True)
+        # Upload original file from temp file path (direct disk-to-OSS, no
+        # extra BytesIO or temp file needed).
+        if self.page_image_storage and temp_file_path is not None:
+            read_documents = await self._async_upload_original_file(content, temp_file_path, read_documents)
         await self._ahandle_vector_db_insert(content, read_documents, upsert)
+        # Clean up temp file after all processing is done
+        if temp_file_path:
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
 
     def _load_from_url(
         self,
@@ -1723,8 +1791,6 @@ class Knowledge(RemoteKnowledge):
 
         # Set name from URL if not provided
         if not content.name and content.url:
-            from urllib.parse import urlparse
-
             parsed = urlparse(content.url)
             url_path = Path(parsed.path)
             content.name = url_path.name if url_path.name else content.url
@@ -1742,8 +1808,6 @@ class Knowledge(RemoteKnowledge):
 
         # 2. Validate URL
         try:
-            from urllib.parse import urlparse
-
             parsed_url = urlparse(content.url)
             if not all([parsed_url.scheme, parsed_url.netloc]):
                 content.status = ContentStatus.FAILED
@@ -1760,10 +1824,19 @@ class Knowledge(RemoteKnowledge):
         url_path = Path(parsed_url.path)
         file_extension = url_path.suffix.lower()
 
-        bytes_content = None
+        # If URL has no extension, try to detect from Content-Type via HEAD request
+        if not file_extension:
+            file_extension = self._detect_extension_from_content_type(content.url) or ""
+
+        # Download to a temp file on disk instead of BytesIO (memory) so that
+        # large files don't exhaust memory.
+        temp_file_path: Optional[Path] = None
         if file_extension:
             response = fetch_with_retry(content.url)
-            bytes_content = BytesIO(response.content)
+            with tempfile.NamedTemporaryFile(suffix=file_extension, delete=False) as tmp:
+                tmp.write(response.content)
+                temp_file_path = Path(tmp.name)
+            del response  # free the response body buffer
 
         # 4. Select reader
         name = content.name if content.name else content.url
@@ -1783,10 +1856,16 @@ class Knowledge(RemoteKnowledge):
                     read_documents = reader.read(content.url, name=name)
                 else:
                     password = content.auth.password if content.auth and content.auth.password is not None else None
-                    source = bytes_content if bytes_content else content.url
+                    source = temp_file_path if temp_file_path else content.url
                     read_documents = self._read(reader, source, name=name, password=password)
 
         except Exception as e:
+            # Clean up temp file on read failure
+            if temp_file_path:
+                try:
+                    os.unlink(temp_file_path)
+                except OSError:
+                    pass
             log_error(f"Error reading URL: {content.url} - {str(e)}")
             content.status = ContentStatus.FAILED
             content.status_message = f"Error reading URL: {content.url} - {str(e)}"
@@ -1820,19 +1899,32 @@ class Knowledge(RemoteKnowledge):
                 doc_id = generate_id(doc_hash)
                 self._prepare_documents_for_insert(source_docs, doc_id, calculate_sizes=True)
 
+                # Upload page images for this source group
+                local_page_paths: List[str] = []
+                if self.page_image_storage:
+                    source_docs, local_page_paths = self._upload_page_images(source_docs)
+
                 # Insert with per-document hash
                 if self.vector_db.upsert_available() and upsert:
                     try:
                         self.vector_db.upsert(doc_hash, source_docs, content.metadata)
                     except Exception as e:
                         log_error(f"Error upserting document from {source_url}: {e}")
+                        if local_page_paths:
+                            self._cleanup_local_page_images(source_docs, local_page_paths)
                         continue
                 else:
                     try:
                         self.vector_db.insert(doc_hash, documents=source_docs, filters=content.metadata)
                     except Exception as e:
                         log_error(f"Error inserting document from {source_url}: {e}")
+                        if local_page_paths:
+                            self._cleanup_local_page_images(source_docs, local_page_paths)
                         continue
+
+                # Cleanup temp files after successful insert
+                if local_page_paths:
+                    self._cleanup_local_page_images(source_docs, local_page_paths)
 
             content.status = ContentStatus.COMPLETED
             self._update_content(content)
@@ -1842,7 +1934,16 @@ class Knowledge(RemoteKnowledge):
         if not content.id:
             content.id = generate_id(content.content_hash or "")
         self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True)
+        # Upload original file from temp file path (direct disk-to-OSS).
+        if self.page_image_storage and temp_file_path is not None:
+            read_documents = self._upload_original_file(content, temp_file_path, read_documents)
         self._handle_vector_db_insert(content, read_documents, upsert)
+        # Clean up temp file after all processing is done
+        if temp_file_path:
+            try:
+                os.unlink(temp_file_path)
+            except OSError:
+                pass
 
     async def _aload_from_content(
         self,
@@ -3107,7 +3208,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         from agno.tools.function import Function
         from agno.utils.timer import Timer
 
-        def search_knowledge_base(query: str) -> str:
+        def search_knowledge_base(query: str) -> Union[str, ToolResult]:
             """Use this function to search the knowledge base for information about a query.
 
             Args:
@@ -3116,6 +3217,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            from agno.tools.function import ToolResult
+
             retrieval_timer = Timer()
             retrieval_timer.start()
 
@@ -3143,8 +3246,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                from agno.tools.function import ToolResult
-
                 images = self._get_page_images_for_docs(docs)
                 if images:
                     return ToolResult(
@@ -3154,7 +3255,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             return self._convert_documents_to_string(docs, agent)
 
-        async def asearch_knowledge_base(query: str) -> str:
+        async def asearch_knowledge_base(query: str) -> Union[str, ToolResult]:
             """Use this function to search the knowledge base for information about a query asynchronously.
 
             Args:
@@ -3163,6 +3264,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            from agno.tools.function import ToolResult
+
             retrieval_timer = Timer()
             retrieval_timer.start()
 
@@ -3190,8 +3293,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                from agno.tools.function import ToolResult
-
                 images = self._get_page_images_for_docs(docs)
                 if images:
                     return ToolResult(
@@ -3229,7 +3330,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         except ImportError:
             get_agentic_or_user_search_filters = None  # type: ignore[assignment]
 
-        def search_knowledge_base(query: str, filters: Optional[List[Any]] = None) -> str:
+        def search_knowledge_base(query: str, filters: Optional[List[Any]] = None) -> Union[str, ToolResult]:
             """Use this function to search the knowledge base for information about a query.
 
             Args:
@@ -3239,6 +3340,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            from agno.tools.function import ToolResult
+
             # Merge agentic filters with user-provided filters
             search_filters: Optional[Union[Dict[str, Any], List[FilterExpr]]] = None
             if filters and get_agentic_or_user_search_filters is not None:
@@ -3287,8 +3390,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                from agno.tools.function import ToolResult
-
                 images = self._get_page_images_for_docs(docs)
                 if images:
                     return ToolResult(
@@ -3298,7 +3399,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             return self._convert_documents_to_string(docs, agent)
 
-        async def asearch_knowledge_base(query: str, filters: Optional[List[Any]] = None) -> str:
+        async def asearch_knowledge_base(query: str, filters: Optional[List[Any]] = None) -> Union[str, ToolResult]:
             """Use this function to search the knowledge base for information about a query asynchronously.
 
             Args:
@@ -3308,6 +3409,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            from agno.tools.function import ToolResult
+
             # Merge agentic filters with user-provided filters
             search_filters: Optional[Union[Dict[str, Any], List[FilterExpr]]] = None
             if filters and get_agentic_or_user_search_filters is not None:
@@ -3356,8 +3459,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                from agno.tools.function import ToolResult
-
                 images = self._get_page_images_for_docs(docs)
                 if images:
                     return ToolResult(
@@ -3392,8 +3493,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         Returns:
             (docs, local_paths) where local_paths are PNG files to delete after insert.
         """
-        import os
-
         if not self.page_image_storage:
             return docs, []
 
@@ -3430,7 +3529,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     else:
                         import time as _time
 
-                        delay = min(self.upload_retry_base_delay * (2 ** attempt), 10)
+                        delay = min(self.upload_retry_base_delay * (2**attempt), 10)
                         log_warning(f"Upload retry {attempt + 1}/{self.upload_max_retries} for {local_path}: {e}")
                         _time.sleep(delay)
             if url:
@@ -3466,7 +3565,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         exponential-backoff retry for transient failures.
         """
         import asyncio
-        import os
 
         if not self.page_image_storage:
             return docs, []
@@ -3509,17 +3607,13 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                                 f"for {local_path}: {e}"
                             )
                             return None
-                        delay = min(base_delay * (2 ** attempt), 10)
-                        log_warning(
-                            f"Upload retry {attempt + 1}/{max_retries} for {local_path}: {e}"
-                        )
+                        delay = min(base_delay * (2**attempt), 10)
+                        log_warning(f"Upload retry {attempt + 1}/{max_retries} for {local_path}: {e}")
                         await asyncio.sleep(delay)
             return None  # pragma: no cover
 
         # Phase 1: concurrent uploads with retry
-        results = await asyncio.gather(
-            *[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items]
-        )
+        results = await asyncio.gather(*[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items])
 
         page_url_map: Dict[int, str] = {}
         local_paths: List[str] = []
@@ -3557,8 +3651,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         created for PDF/PPTX page image conversion).
         Also clears the transient ``local_embed_path`` field on each doc.
         """
-        import os
-
         parent_dirs: set = set()
         for local_path in local_paths:
             try:
@@ -3629,7 +3721,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = meta.get(url_field)
                 if url:
                     try:
-                        meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
+                        meta[url_field] = await self.page_image_storage.async_sign_url(
+                            url, expires=self.url_signature_expires
+                        )
                     except Exception as e:
                         log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
 
@@ -3676,7 +3770,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     url = meta.get(url_field)
                     if url:
                         try:
-                            meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
+                            meta[url_field] = await self.page_image_storage.async_sign_url(
+                                url, expires=self.url_signature_expires
+                            )
                         except Exception as e:
                             log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
             signed.append(ref)
@@ -3695,8 +3791,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
     @staticmethod
     def _strip_reference_url_signatures(
-        references: List["MessageReferences"],
-    ) -> List["MessageReferences"]:
+        references: List[Any],  # List[MessageReferences]
+    ) -> List[Any]:  # List[MessageReferences]
         """Return a copy of *references* with OSS URL signatures stripped.
 
         Each ``page_image_url`` and ``file_url`` in ``meta_data`` is reduced to
@@ -3751,32 +3847,18 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         For a :class:`~io.BytesIO` source a temp file is written, uploaded, then
         deleted so no local copy of the original is kept.
         """
+        from agno.knowledge.reader.utils import temp_file_from_bytesio
+
         if not self.page_image_storage:
             return docs
-
-        import os
-        import tempfile
 
         content_id = content.id or ""
         filename = content.name or "file"
         object_key = f"{content_id}/{filename}"
         try:
-            if isinstance(file_source, Path):
-                url = self.page_image_storage.upload(str(file_source), object_key)
-            else:
-                suffix = Path(filename).suffix or ".bin"
-                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                    file_source.seek(0)
-                    tmp.write(file_source.read())
-                    tmp_path = tmp.name
-                file_source.seek(0)
-                try:
-                    url = self.page_image_storage.upload(tmp_path, object_key)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
+            suffix = Path(filename).suffix or ".bin"
+            with temp_file_from_bytesio(file_source, suffix) as tmp_path:
+                url = self.page_image_storage.upload(str(tmp_path), object_key)
             for doc in docs:
                 doc.meta_data["file_url"] = url
         except Exception as e:
@@ -3790,32 +3872,18 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         docs: List[Document],
     ) -> List[Document]:
         """Async version of :meth:`_upload_original_file`."""
+        from agno.knowledge.reader.utils import temp_file_from_bytesio
+
         if not self.page_image_storage:
             return docs
-
-        import os
-        import tempfile
 
         content_id = content.id or ""
         filename = content.name or "file"
         object_key = f"{content_id}/{filename}"
         try:
-            if isinstance(file_source, Path):
-                url = await self.page_image_storage.async_upload(str(file_source), object_key)
-            else:
-                suffix = Path(filename).suffix or ".bin"
-                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                    file_source.seek(0)
-                    tmp.write(file_source.read())
-                    tmp_path = tmp.name
-                file_source.seek(0)
-                try:
-                    url = await self.page_image_storage.async_upload(tmp_path, object_key)
-                finally:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
+            suffix = Path(filename).suffix or ".bin"
+            with temp_file_from_bytesio(file_source, suffix) as tmp_path:
+                url = await self.page_image_storage.async_upload(str(tmp_path), object_key)
             for doc in docs:
                 doc.meta_data["file_url"] = url
         except Exception as e:
@@ -3912,6 +3980,62 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         except Exception:
             return False
 
+    def _prefer_url_over_local(self, doc: Document, page_num: int, resolved: str) -> str:
+        """If *resolved* is a local file path and ``page_image_storage`` is configured,
+        upload the file on-the-fly and return a signed URL.
+
+        This avoids sending large base64-encoded images to multimodal LLMs when a
+        cloud-storage backend is available.  Returns the original *resolved* string
+        unchanged when no storage is configured or the upload fails.
+        """
+        if resolved.startswith("http") or not self.page_image_storage:
+            return resolved
+
+        if not Path(resolved).is_file():
+            return resolved
+
+        storage = self.page_image_storage
+        content_id = doc.content_id or doc.name or ""
+        img_suffix = os.path.splitext(resolved)[1] or ".png"
+        object_key = f"{content_id}/page_{page_num}{img_suffix}"
+
+        try:
+            url = storage.upload(resolved, object_key)
+            if url:
+                signed = storage.sign_url(url, expires=self.url_signature_expires)
+                if signed:
+                    log_debug(f"JIT-uploaded page image → {signed}")
+                    return signed
+        except Exception as e:
+            log_warning(f"JIT upload failed for page {page_num}: {e}")
+
+        return resolved
+
+    async def _async_prefer_url_over_local(self, doc: Document, page_num: int, resolved: str) -> str:
+        """Async version of :meth:`_prefer_url_over_local`."""
+        if resolved.startswith("http") or not self.page_image_storage:
+            return resolved
+
+        if not Path(resolved).is_file():
+            return resolved
+
+        storage = self.page_image_storage
+        content_id = doc.content_id or doc.name or ""
+        img_suffix = os.path.splitext(resolved)[1] or ".png"
+        object_key = f"{content_id}/page_{page_num}{img_suffix}"
+
+        try:
+            url = await storage.async_upload(resolved, object_key)
+            if url:
+                signed = await storage.async_sign_url(url, expires=self.url_signature_expires)
+                if signed:
+                    log_debug(f"JIT-uploaded page image → {signed}")
+                    return signed
+        except Exception as e:
+            log_warning(f"Async JIT upload failed for page {page_num}: {e}")
+
+        return resolved
+
     def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
         """Collect page images for retrieved documents.
 
@@ -3921,13 +4045,17 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
         Deduplicates by (doc_identifier, page_number) and caps at max_retrieval_images.
 
+        When ``page_image_storage`` is configured and a local file path is resolved,
+        the image is uploaded on-the-fly so that a signed URL is sent to the LLM
+        instead of embedding the file as base64 (which produces a large request body).
+
         Returns:
             List of agno.media.Image objects.
         """
         from agno.media import Image
 
         seen: set = set()
-        image_refs: List[tuple] = []  # (doc_id, page_num, image_path)
+        image_refs: List[tuple] = []  # (doc_id, page_num, image_path_or_url)
 
         # Clamp config values to safe bounds
         window = max(0, self.image_window_size)
@@ -3952,10 +4080,6 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 total = 9999
 
             doc_id = doc.content_id or doc.name or ""
-            # if doc.meta_data.get("file_url") and self.page_image_storage:
-            #     doc.meta_data['file_url'] = self.page_image_storage.sign_url(
-            #         doc.meta_data.get("file_url"), expires=self.url_signature_expires
-            #     )
             if doc.meta_data.get("doc_type") == "page_image":
                 # Direct image hit — include exactly this page
                 pages_to_add = [page_num] if page_num is not None else []
@@ -3971,10 +4095,15 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 pages_to_add = []
 
             for p in pages_to_add:
+                if len(image_refs) >= max_images:
+                    break
                 key = (doc_id, p)
                 if key not in seen:
                     resolved = self._resolve_page_image(doc, p)
                     if resolved:
+                        # Prefer URL over local path: upload on-the-fly if storage
+                        # is available but we only got a local file path.
+                        resolved = self._prefer_url_over_local(doc, p, resolved)
                         if self.verify_image_urls and resolved.startswith("http"):
                             if not self._check_url_accessible(resolved):
                                 log_warning(f"Skipping unreachable image URL: {resolved}")
@@ -3983,11 +4112,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                         image_refs.append((doc_id, p, resolved))
 
         # Sort by (doc_id, page_number) for consistent ordering
-        # image_refs.sort(key=lambda x: (x[0], x[1]))
-        return [
-            Image(url=r) if r.startswith("http") else Image(filepath=r)
-            for _, _, r in image_refs[:max_images]
-        ]
+        return [Image(url=r) if r.startswith("http") else Image(filepath=r) for _, _, r in image_refs[:max_images]]
 
     def _convert_documents_to_string(
         self,

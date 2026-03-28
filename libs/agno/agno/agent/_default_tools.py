@@ -15,6 +15,7 @@ from typing import (
 
 if TYPE_CHECKING:
     from agno.agent.agent import Agent
+    from agno.tools.function import ToolResult
 
 from agno.culture.manager import CultureManager
 from agno.db.base import BaseDb, SessionType
@@ -221,7 +222,7 @@ def create_knowledge_search_tool(
 
     else:
 
-        def search_knowledge_base(query: str) -> str:
+        def search_knowledge_base(query: str) -> Union[str, ToolResult]:
             """Use this function to search the knowledge base for information about a query.
 
             Args:
@@ -230,6 +231,8 @@ def create_knowledge_search_tool(
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            from agno.tools.function import ToolResult
+
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
@@ -247,11 +250,12 @@ def create_knowledge_search_tool(
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        ref_dicts = (
+                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        )
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
-                            from agno.tools.function import ToolResult
                             return ToolResult(
                                 content=_format_results(ref_dicts),
                                 images=images,
@@ -272,7 +276,7 @@ def create_knowledge_search_tool(
             log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
             return _format_results(docs)
 
-        async def asearch_knowledge_base(query: str) -> str:
+        async def asearch_knowledge_base(query: str) -> Union[str, ToolResult]:
             """Use this function to search the knowledge base for information about a query.
 
             Args:
@@ -281,6 +285,8 @@ def create_knowledge_search_tool(
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            from agno.tools.function import ToolResult
+
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
@@ -297,11 +303,12 @@ def create_knowledge_search_tool(
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        ref_dicts = (
+                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        )
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
-                            from agno.tools.function import ToolResult
                             return ToolResult(
                                 content=_format_results(ref_dicts),
                                 images=images,

@@ -49,7 +49,7 @@ class AliyunOSSStorage(PageImageStorage):
     def _key_from_url(self, base_url: str) -> str:
         prefix = f"https://{self.bucket_name}.{self.endpoint}/"
         if base_url.startswith(prefix):
-            return base_url[len(prefix):].split("?")[0]
+            return base_url[len(prefix) :].split("?")[0]
         # Fallback: strip query params and return last path component
         return base_url.split("?")[0].split("/", 3)[-1]
 

@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from agno.exceptions import AgnoError, ModelProviderError
 from agno.knowledge.embedder.base import Embedder
+from agno.knowledge.utils import image_path_to_data_uri
 from agno.utils.log import log_error, log_warning
 
 try:
@@ -379,15 +380,7 @@ class AwsBedrockEmbedder(Embedder):
     @staticmethod
     def _to_image_data_uri(image_path_or_uri: str) -> str:
         """Convert a local file path to a base64 data URI if needed."""
-        if image_path_or_uri.startswith("data:"):
-            return image_path_or_uri
-        import base64
-        import mimetypes
-        mime_type, _ = mimetypes.guess_type(image_path_or_uri)
-        mime_type = mime_type or "image/png"
-        with open(image_path_or_uri, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("utf-8")
-        return f"data:{mime_type};base64,{encoded}"
+        return image_path_to_data_uri(image_path_or_uri)
 
     def get_image_embedding(self, image_data_uri: str) -> List[float]:
         """

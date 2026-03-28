@@ -1,5 +1,7 @@
+import base64
+import mimetypes
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.reader.reader_factory import ReaderFactory
@@ -47,6 +49,39 @@ def set_agno_metadata(
     agno_meta[key] = value
     metadata[RESERVED_AGNO_KEY] = agno_meta
     return metadata
+
+
+def filter_empty_documents(docs: List[Any]) -> List[Any]:
+    """Filter out documents with empty or None content."""
+    return [doc for doc in docs if doc and doc.content]
+
+
+def image_path_to_data_uri(image_path: Union[str, Path]) -> str:
+    """Convert image file path to base64 data URI.
+
+    If the input is already a data URI or HTTP(S) URL, it is returned as-is.
+
+    Args:
+        image_path: Path to the image file, or an existing data URI / URL.
+
+    Returns:
+        str: Base64 data URI string (e.g., "data:image/png;base64,...")
+    """
+    if isinstance(image_path, str) and (image_path.startswith("data:") or image_path.startswith("http")):
+        return image_path
+
+    image_path = Path(image_path)
+
+    # Guess MIME type from extension
+    mime_type, _ = mimetypes.guess_type(str(image_path))
+    if mime_type is None:
+        mime_type = "image/png"
+
+    # Read and encode image
+    with open(image_path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("utf-8")
+
+    return f"data:{mime_type};base64,{data}"
 
 
 def get_agno_metadata(
@@ -354,6 +389,9 @@ CONTENT_TYPE_MAP: Dict[str, str] = {
     ".wav": "audio/wav",
     ".webm": "video/webm",
 }
+
+# Reverse mapping: MIME → extension (derived from CONTENT_TYPE_MAP)
+MIME_TO_EXTENSION: Dict[str, str] = {v: k for k, v in CONTENT_TYPE_MAP.items()}
 
 
 def get_content_type(file_path: str) -> str:

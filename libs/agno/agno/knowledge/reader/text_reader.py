@@ -47,13 +47,17 @@ class TextReader(Reader):
                 file.seek(0)
                 file_contents = file.read().decode(self.encoding or "utf-8")
 
-            documents = [
-                Document(
-                    name=file_name,
-                    id=str(uuid.uuid4()),
-                    content=file_contents,
-                )
-            ] if file_contents else []
+            documents = (
+                [
+                    Document(
+                        name=file_name,
+                        id=str(uuid.uuid4()),
+                        content=file_contents,
+                    )
+                ]
+                if file_contents
+                else []
+            )
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -87,11 +91,15 @@ class TextReader(Reader):
                 file.seek(0)
                 file_contents = file.read().decode(self.encoding or "utf-8")
 
-            document = Document(
-                name=file_name,
-                id=str(uuid.uuid4()),
-                content=file_contents,
-            ) if file_contents else None
+            document = (
+                Document(
+                    name=file_name,
+                    id=str(uuid.uuid4()),
+                    content=file_contents,
+                )
+                if file_contents
+                else None
+            )
 
             if self.chunk and document:
                 return await self._async_chunk_document(document)

@@ -1,4 +1,3 @@
-import logging
 import asyncio
 from hashlib import md5
 from math import sqrt
@@ -506,8 +505,12 @@ class PgVector(VectorDb):
             raise
 
     def _get_document_record(
-        self, doc: Document, filters: Optional[Dict[str, Any]] = None, content_hash: str = "",
-        max_retries: int = 3, retry_base_delay: float = 0.5,
+        self,
+        doc: Document,
+        filters: Optional[Dict[str, Any]] = None,
+        content_hash: str = "",
+        max_retries: int = 3,
+        retry_base_delay: float = 0.5,
     ) -> Dict[str, Any]:
         import time as _time
 
@@ -519,7 +522,7 @@ class PgVector(VectorDb):
                 if attempt == max_retries:
                     log_error(f"Embedding failed after {max_retries} retries for '{doc.name}': {e}")
                     raise
-                delay = min(retry_base_delay * (2 ** attempt), 10)
+                delay = min(retry_base_delay * (2**attempt), 10)
                 log_warning(f"Embedding retry {attempt + 1}/{max_retries} for '{doc.name}': {e}")
                 _time.sleep(delay)
         cleaned_content = self._clean_content(doc.content)
@@ -566,11 +569,13 @@ class PgVector(VectorDb):
                     if attempt == max_retries:
                         log_error(f"Embedding rate-limited after {max_retries} retries for '{doc.name}': {e}")
                         raise
-                    delay = min(base_delay * (2 ** attempt), 30)
-                    log_warning(f"Embedding rate-limited, retry {attempt + 1}/{max_retries} for '{doc.name}' in {delay}s")
+                    delay = min(base_delay * (2**attempt), 30)
+                    log_warning(
+                        f"Embedding rate-limited, retry {attempt + 1}/{max_retries} for '{doc.name}' in {delay}s"
+                    )
                     await asyncio.sleep(delay)
                 elif attempt < max_retries:
-                    delay = min(base_delay * (2 ** attempt), 10)
+                    delay = min(base_delay * (2**attempt), 10)
                     log_warning(f"Embedding retry {attempt + 1}/{max_retries} for '{doc.name}': {e}")
                     await asyncio.sleep(delay)
                 else:

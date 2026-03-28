@@ -34,6 +34,8 @@ class Embedder:
         """Async get embedding for an image file. Returns None if not supported by this embedder."""
         raise NotImplementedError
 
-    async def async_get_image_embedding_and_usage(self, image_path: str) -> Tuple[Optional[List[float]], Optional[Dict]]:
+    async def async_get_image_embedding_and_usage(
+        self, image_path: str
+    ) -> Tuple[Optional[List[float]], Optional[Dict]]:
         """Async get embedding + token usage for an image. Subclasses override to return real usage."""
         return await self.async_get_image_embedding(image_path), None

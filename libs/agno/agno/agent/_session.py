@@ -243,9 +243,7 @@ def _strip_signed_urls_from_session(agent: Agent, session: Union[AgentSession, T
             run.references = strip_fn(refs)
 
 
-def _re_sign_urls_in_session(
-    agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]
-) -> None:
+def _re_sign_urls_in_session(agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]) -> None:
     """Re-sign OSS URLs in run references after loading from DB.
 
     The stored references contain unsigned base URLs; this restores

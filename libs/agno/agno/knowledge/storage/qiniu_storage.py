@@ -51,7 +51,7 @@ class QiniuStorage(PageImageStorage):
     def _key_from_url(self, base_url: str) -> str:
         domain = self.domain.rstrip("/")
         if base_url.startswith(domain + "/"):
-            return base_url[len(domain) + 1:].split("?")[0]
+            return base_url[len(domain) + 1 :].split("?")[0]
         return base_url.split("?")[0].rsplit("/", 1)[-1]
 
     def upload(self, local_path: str, object_key: str, content_type: Optional[str] = None) -> str:
