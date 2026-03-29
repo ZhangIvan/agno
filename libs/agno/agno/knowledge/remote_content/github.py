@@ -45,7 +45,7 @@ class GitHubConfig(BaseStorageConfig):
             if self.private_key is None:
                 missing.append("private_key")
             raise ValueError(
-                f"GitHub App authentication requires all three fields: app_id, installation_id, private_key. "
+                "GitHub App authentication requires all three fields: app_id, installation_id, private_key. "
                 f"Missing: {', '.join(missing)}"
             )
         if self.private_key is not None and not self.private_key.strip().startswith("-----BEGIN"):

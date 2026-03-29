@@ -109,7 +109,7 @@ class PgVector(VectorDb):
             if db_url is None:
                 raise ValueError("Must provide 'db_url' if 'db_engine' is None.")
             try:
-                db_engine = create_engine(db_url)
+                db_engine = create_engine(db_url, pool_pre_ping=True, pool_recycle=3600)
             except Exception as e:
                 log_error(f"Failed to create engine from 'db_url': {e}")
                 raise

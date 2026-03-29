@@ -17,10 +17,10 @@ class InfinityReranker(Reranker):
     model: str = "BAAI/bge-reranker-base"
     host: str = "localhost"
     port: int = 7997
-    # 完整请求地址：http://localhost:7997/xxxx  但不包含 /rerank  由后续行为去添加
+    # Full request URL (e.g. http://localhost:7997/xxxx), excluding /rerank which is appended by the client
     url: Optional[str] = None
     top_n: Optional[int] = None
-    # 过滤分数阈值 >>> 在 top_n 的基础上在过滤分值
+    # Score threshold to filter results after top_n selection
     score_threshold: Optional[float] = None
     api_key: Optional[str] = None
     verify_ssl: bool = True

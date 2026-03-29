@@ -59,7 +59,7 @@ class CodeChunking(ChunkingStrategy):
             if "Tokenizer not found" in str(e):
                 raise ImportError(
                     f"Missing dependencies for tokenizer `{self.tokenizer}`. "
-                    f"Please install using `pip install tiktoken`, `pip install transformers`, or `pip install tokenizers`"
+                    "Please install using `pip install tiktoken`, `pip install transformers`, or `pip install tokenizers`"
                 ) from e
             raise
 

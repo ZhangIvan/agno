@@ -191,9 +191,10 @@ class MarkdownChunking(ChunkingStrategy):
         try:
             # Create a temporary file with the markdown content.
             # This is the recommended usage of the unstructured library.
+            temp_file_path: str | None = None
             with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as temp_file:
-                temp_file.write(content)
                 temp_file_path = temp_file.name
+                temp_file.write(content)
 
             try:
                 elements = partition_md(filename=temp_file_path)
@@ -228,7 +229,8 @@ class MarkdownChunking(ChunkingStrategy):
 
             # Always clean up the temporary file
             finally:
-                os.unlink(temp_file_path)
+                if temp_file_path:
+                    os.unlink(temp_file_path)
 
         # Fallback to simple paragraph splitting if the markdown chunking fails
         except Exception:

@@ -1,0 +1,14 @@
+error: unexpected argument '--config-file' found
+
+  tip:error: unexpected argument '--config-file' found
+
+  tip: a similar argument exists: '--config'
+
+Usage: ruff check --config <CONFIG_OPTION> <FILES>...
+
+For more information, try '--help'.
+ a similar argument exists: '--config'
+
+Usage: ruff check --config <CONFIG_OPTION> <FILES>...
+
+For more information, try '--help'.

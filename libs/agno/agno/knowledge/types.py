@@ -66,6 +66,15 @@ def get_content_type_enum(content_type_str: str) -> ContentType:
     return ContentType(content_type_str)
 
 
+class KnowledgeContentOrigin(str, Enum):
+    """Origin of knowledge content for processing routing."""
+
+    PATH = "path"
+    URL = "url"
+    TOPIC = "topic"
+    CONTENT = "content"
+
+
 class KnowledgeFilter(BaseModel):
     key: str
     value: Any

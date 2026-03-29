@@ -440,9 +440,9 @@ class BasePDFReader(Reader):
             except KeyError as e:
                 if "'bbox'" in str(e):
                     log_error(f"Font descriptor missing 'bbox' on page processing: {e}")
-                    # 尝试使用更宽松的文本提取参数
+                    # Try with more lenient text extraction parameters
                     try:
-                        # 有些版本的pypdf支持不同的参数
+                        # Some pypdf versions support different extraction kwargs
                         page_text = page.extract_text(kwargs={"space_width": 1.0})
                     except Exception:
                         page_text = ""

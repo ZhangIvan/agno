@@ -70,7 +70,8 @@ class QiniuStorage(PageImageStorage):
         return self._base_url(key)
 
     def sign_url(self, base_url: str, expires: int = 3600) -> str:
-        log_debug(f"Qiniu sign_url: {base_url}  expires={expires}s")
+        key = self._key_from_url(base_url)
+        log_debug(f"Qiniu sign_url: {key}  expires={expires}s")
         auth = self._get_auth()
         deadline = int(time.time()) + expires
         return auth.private_download_url(base_url, expires=deadline)

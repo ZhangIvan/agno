@@ -75,8 +75,8 @@ class ImageReader(Reader):
             "WEBP",
             quality=webp_quality,
             method=4,
-            lossless=False,  # 有损 = 体积暴减
-            optimize=True,  # 额外优化文件大小
+            lossless=False,  # Lossy = significant size reduction
+            optimize=True,  # Additional size optimization
         )
         return cache_path, cache_dir
 

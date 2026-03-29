@@ -263,7 +263,7 @@ class FileSystemKnowledge:
         return dedent(
             f"""
             You have access to a filesystem knowledge base containing documents at: {self.base_dir}
-            
+
             IMPORTANT: You MUST use these tools to search and read files before answering questions.
             Do NOT answer from your own knowledge - always search the files first.
 
