@@ -66,6 +66,7 @@ class PgVector(VectorDb):
         reranker: Optional[Reranker] = None,
         create_schema: bool = True,
         similarity_threshold: Optional[float] = None,
+        **kwargs
     ):
         """
         Initialize the PgVector instance.
@@ -104,7 +105,7 @@ class PgVector(VectorDb):
             id = generate_id(seed)
 
         # Initialize base class
-        super().__init__(id=id, name=name, description=description, similarity_threshold=similarity_threshold)
+        super().__init__(id=id, name=name, description=description, similarity_threshold=similarity_threshold, **kwargs)
 
         if db_engine is None:
             if db_url is None:
@@ -551,9 +552,14 @@ class PgVector(VectorDb):
         base_delay: float = 0.5,
     ) -> None:
         """Embed a single document with exponential-backoff retry."""
+        if self.page_image_storage and doc.meta_data.get("page_image_url"):
+            doc.meta_data['page_image_url_sign']= await self.page_image_storage.async_sign_url(doc.meta_data.get("page_image_url"))
+
         for attempt in range(max_retries + 1):
             try:
                 await doc.async_embed(embedder=self.embedder)
+                if "page_image_url_sign" in doc.meta_data:
+                    doc.meta_data.pop("page_image_url_sign")
                 return
             except Exception as e:
                 error_str = str(e).lower()

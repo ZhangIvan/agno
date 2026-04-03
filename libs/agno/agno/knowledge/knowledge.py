@@ -1,4 +1,3 @@
-import logging
 import asyncio
 import hashlib
 import io
@@ -23,6 +22,7 @@ from agno.knowledge.remote_content.remote_content import (
     RemoteContent,
 )
 from agno.knowledge.remote_knowledge import RemoteKnowledge
+from agno.knowledge.storage.base import PageImageStorage
 from agno.knowledge.utils import merge_user_metadata, set_agno_metadata, strip_agno_metadata
 from agno.utils.http import async_fetch_with_retry
 from agno.utils.log import log_debug, log_error, log_info, log_warning
@@ -59,21 +59,27 @@ class Knowledge(RemoteKnowledge):
     # When True, retrieved text chunks are replaced by their corresponding page images
     # when sent to the LLM. Requires documents to have page_image_path in metadata.
     use_page_images: bool = False
-    # Maximum number of page images to include in a single retrieval response.
-    max_retrieval_images: int = 3
-    # Sliding window around each matched page (±N pages). 1 means prev+current+next.
+    # Maximum number of source files to extract images from, selected by best similarity.
+    max_retrieval_images: int = 5
+    # Sliding window size around each matched page (±N pages) within the same source file.
+    # 0 = no expansion, only exact matched pages. 1 = prev+current+next (3 pages per hit).
     image_window_size: int = 0
+    # When True, bridges 1-page gaps between expanded intervals for continuity.
+    # e.g. if expanded pages are [3,4] and [6,7], gap page 5 is included => [3,4,5,6,7].
+    # Only effective when image_window_size > 0.
+    bridge_page_gaps: bool = True
     # Optional OSS/cloud storage backend for page images.
     # When set, page PNGs are uploaded at insert time and signed URLs are returned
     # at retrieval time instead of local file paths.
-    page_image_storage: Optional[Any] = None  # PageImageStorage instance
+    page_image_storage: Optional[PageImageStorage] = None  # PageImageStorage instance
     # --- Upload settings ---
     # Maximum number of concurrent image uploads (async path only).
     upload_concurrency: int = 10
-    # Maximum retry attempts per upload on transient failures.
-    upload_max_retries: int = 3
-    # Base delay in seconds for exponential backoff between retries.
-    upload_retry_base_delay: float = 0.5
+    # --- URL signature settings ---
+    # Expiration time in seconds for signed URLs (default 7200 = 2 hours).
+    # Only applies when page_image_storage is configured for private buckets.
+    url_signature_expires: int = 7200
+    # Retry is configured on the storage backend itself (max_retries / retry_base_delay).
     # --- Image URL verification ---
     # When True, perform a lightweight HEAD request to verify image URLs are
     # accessible before passing them to the LLM.  Default is False since
@@ -81,15 +87,15 @@ class Knowledge(RemoteKnowledge):
     verify_image_urls: bool = False
     # Timeout in seconds for the HEAD request when verify_image_urls is True.
     verify_image_url_timeout: float = 1.0
-    # --- URL signature settings ---
-    # Expiration time in seconds for signed URLs (default 7200 = 2 hours).
-    # Only applies when page_image_storage is configured for private buckets.
-    url_signature_expires: int = 7200
+
 
     def __post_init__(self):
         from agno.vectordb import VectorDb
 
         self.vector_db = cast(VectorDb, self.vector_db)
+        if self.vector_db and not getattr( self.vector_db, 'page_image_storage') and self.page_image_storage:
+            [setattr(self.vector_db, file, getattr(self, file)) for file in ["page_image_storage", "upload_concurrency", "url_signature_expires"]]
+
         if self.vector_db and not self.vector_db.exists():
             self.vector_db.create()
 
@@ -574,7 +580,7 @@ class Knowledge(RemoteKnowledge):
             log_debug(f"Getting {_max_results} relevant documents for query: {query}")
             return self.vector_db.search(query=query, limit=_max_results, filters=search_filters)
         except Exception as e:
-            log_error(f"Error searching for documents: {e}")
+            log_error(f"Error searching for documents: {e}", exc_info=True)
             return []
 
     async def asearch(
@@ -618,7 +624,7 @@ class Knowledge(RemoteKnowledge):
                 log_info("Vector db does not support async search")
                 return self.vector_db.search(query=query, limit=_max_results, filters=search_filters)
         except Exception as e:
-            log_error(f"Error searching for documents: {e}")
+            log_error(f"Error searching for documents: {e}", exc_info=True)
             return []
 
     # ==========================================
@@ -1635,7 +1641,7 @@ class Knowledge(RemoteKnowledge):
                     read_documents = await self._aread(reader, source, name=name, password=password)
 
         except Exception as e:
-            log_error(f"Error reading URL: {content.url} - {str(e)}")
+            log_error(f"Error reading URL: {content.url} - {str(e)}", exc_info=True)
             content.status = ContentStatus.FAILED
             content.status_message = f"Error reading URL: {content.url} - {str(e)}"
             await self._aupdate_content(content)
@@ -1673,13 +1679,13 @@ class Knowledge(RemoteKnowledge):
                     try:
                         await self.vector_db.async_upsert(doc_hash, source_docs, content.metadata)
                     except Exception as e:
-                        log_error(f"Error upserting document from {source_url}: {e}")
+                        log_error(f"Error upserting document from {source_url}: {e}", exc_info=True)
                         continue
                 else:
                     try:
                         await self.vector_db.async_insert(doc_hash, documents=source_docs, filters=content.metadata)
                     except Exception as e:
-                        log_error(f"Error inserting document from {source_url}: {e}")
+                        log_error(f"Error inserting document from {source_url}: {e}", exc_info=True)
                         continue
 
             content.status = ContentStatus.COMPLETED
@@ -1787,7 +1793,7 @@ class Knowledge(RemoteKnowledge):
                     read_documents = self._read(reader, source, name=name, password=password)
 
         except Exception as e:
-            log_error(f"Error reading URL: {content.url} - {str(e)}")
+            log_error(f"Error reading URL: {content.url} - {str(e)}", exc_info=True)
             content.status = ContentStatus.FAILED
             content.status_message = f"Error reading URL: {content.url} - {str(e)}"
             self._update_content(content)
@@ -1825,13 +1831,13 @@ class Knowledge(RemoteKnowledge):
                     try:
                         self.vector_db.upsert(doc_hash, source_docs, content.metadata)
                     except Exception as e:
-                        log_error(f"Error upserting document from {source_url}: {e}")
+                        log_error(f"Error upserting document from {source_url}: {e}", exc_info=True)
                         continue
                 else:
                     try:
                         self.vector_db.insert(doc_hash, documents=source_docs, filters=content.metadata)
                     except Exception as e:
-                        log_error(f"Error inserting document from {source_url}: {e}")
+                        log_error(f"Error inserting document from {source_url}: {e}", exc_info=True)
                         continue
 
             content.status = ContentStatus.COMPLETED
@@ -2430,7 +2436,7 @@ class Knowledge(RemoteKnowledge):
             try:
                 await self.vector_db.async_upsert(content.content_hash, read_documents, content.metadata)  # type: ignore[arg-type]
             except Exception as e:
-                log_error(f"Error upserting document: {e}")
+                log_error(f"Error upserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = "Could not upsert embedding"
                 await self._aupdate_content(content)
@@ -2443,7 +2449,7 @@ class Knowledge(RemoteKnowledge):
                     filters=content.metadata,  # type: ignore[arg-type]
                 )
             except Exception as e:
-                log_error(f"Error inserting document: {e}")
+                log_error(f"Error inserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = "Could not insert embedding"
                 await self._aupdate_content(content)
@@ -2476,7 +2482,7 @@ class Knowledge(RemoteKnowledge):
             try:
                 self.vector_db.upsert(content.content_hash, read_documents, content.metadata)  # type: ignore[arg-type]
             except Exception as e:
-                log_error(f"Error upserting document: {e}")
+                log_error(f"Error upserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = "Could not upsert embedding"
                 self._update_content(content)
@@ -2489,7 +2495,7 @@ class Knowledge(RemoteKnowledge):
                     filters=content.metadata,  # type: ignore[arg-type]
                 )
             except Exception as e:
-                log_error(f"Error inserting document: {e}")
+                log_error(f"Error inserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = "Could not insert embedding"
                 self._update_content(content)
@@ -2654,7 +2660,7 @@ class Knowledge(RemoteKnowledge):
                 return
 
             except Exception as e:
-                log_error(f"Error uploading file to LightRAG: {e}")
+                log_error(f"Error uploading file to LightRAG: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = f"Could not upload to LightRAG: {str(e)}"
                 await self._aupdate_content(content)
@@ -2699,7 +2705,7 @@ class Knowledge(RemoteKnowledge):
                 return
 
             except Exception as e:
-                log_error(f"Error uploading file to LightRAG: {e}")
+                log_error(f"Error uploading file to LightRAG: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = f"Could not upload to LightRAG: {str(e)}"
                 await self._aupdate_content(content)
@@ -2814,7 +2820,7 @@ class Knowledge(RemoteKnowledge):
                 return
 
             except Exception as e:
-                log_error(f"Error uploading file to LightRAG: {e}")
+                log_error(f"Error uploading file to LightRAG: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = f"Could not upload to LightRAG: {str(e)}"
                 self._update_content(content)
@@ -2862,7 +2868,7 @@ class Knowledge(RemoteKnowledge):
                 return
 
             except Exception as e:
-                log_error(f"Error uploading file to LightRAG: {e}")
+                log_error(f"Error uploading file to LightRAG: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
                 content.status_message = f"Could not upload to LightRAG: {str(e)}"
                 self._update_content(content)
@@ -3414,36 +3420,28 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             # Absent (e.g. ImageReader Path input) → user's original, must be preserved.
             is_cache_file = "pages_cache_dir" in doc.meta_data
             content_id = doc.content_id or doc.name or ""
-            img_suffix = os.path.splitext(local_path)[1] or ".webp"
+            suffix = os.path.splitext(local_path)[1].strip()
+            img_suffix = suffix if suffix not in ("", ".") else ".webp"
             object_key = f"{content_id}/page_{page_num}{img_suffix}"
-            url: Optional[str] = None
-            for attempt in range(self.upload_max_retries + 1):
-                try:
-                    url = self.page_image_storage.upload(local_path, object_key)
-                    break
-                except Exception as e:
-                    if attempt == self.upload_max_retries:
-                        log_warning(
-                            f"PageImageStorage.upload failed after {self.upload_max_retries} retries "
-                            f"for {local_path}: {e}"
-                        )
-                    else:
-                        import time as _time
+            try:
+                url = self.page_image_storage.upload(local_path, object_key)
+            except Exception as e:
+                log_error(f"PageImageStorage.upload failed for {local_path}: {e}", exc_info=True)
+                url = None
 
-                        delay = min(self.upload_retry_base_delay * (2 ** attempt), 10)
-                        log_warning(f"Upload retry {attempt + 1}/{self.upload_max_retries} for {local_path}: {e}")
-                        _time.sleep(delay)
             if url:
                 doc.meta_data["page_image_url"] = url
-                # Move local path out of meta (won't be stored in vector DB) into
-                # the transient embed field so embed() can still find it.
-                doc.local_embed_path = local_path
-                doc.meta_data.pop("page_image_path", None)
-                doc.meta_data.pop("pages_cache_dir", None)
-                doc.meta_data.pop("pages_cache_url", None)
                 page_url_map[page_num] = url
-                if is_cache_file:
-                    local_paths.append(local_path)
+
+            # Move local path out of meta (won't be stored in vector DB) into
+            # the transient embed field so embed() can still find it.
+            doc.local_embed_path = local_path
+            doc.meta_data.pop("page_image_path", None)
+            doc.meta_data.pop("pages_cache_dir", None)
+            doc.meta_data.pop("pages_cache_url", None)
+
+            if is_cache_file:
+                local_paths.append(local_path)
 
         # Phase 2: propagate url info to text_chunk docs with matching page_number
         if page_url_map:
@@ -3462,8 +3460,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
     async def _async_upload_page_images(self, docs: List[Document]) -> Tuple[List[Document], List[str]]:
         """Async version of ``_upload_page_images``.
 
-        Uses concurrent uploads with a semaphore to limit parallelism and
-        exponential-backoff retry for transient failures.
+        Uses concurrent uploads with a semaphore to limit parallelism.
+        Retry is handled by the storage backend.
         """
         import asyncio
         import os
@@ -3490,33 +3488,20 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             return docs, []
 
         semaphore = asyncio.Semaphore(self.upload_concurrency)
-        max_retries = self.upload_max_retries
-        base_delay = self.upload_retry_base_delay
         storage = self.page_image_storage
 
         async def _upload_one(
             doc: Document, local_path: str, page_num: int, is_cache_file: bool, object_key: str
         ) -> Optional[Tuple[Document, int, str, Optional[str]]]:
             async with semaphore:
-                for attempt in range(max_retries + 1):
-                    try:
-                        url = await storage.async_upload(local_path, object_key)
-                        return (doc, page_num, url, local_path if is_cache_file else None)
-                    except Exception as e:
-                        if attempt == max_retries:
-                            log_warning(
-                                f"PageImageStorage.async_upload failed after {max_retries} retries "
-                                f"for {local_path}: {e}"
-                            )
-                            return None
-                        delay = min(base_delay * (2 ** attempt), 10)
-                        log_warning(
-                            f"Upload retry {attempt + 1}/{max_retries} for {local_path}: {e}"
-                        )
-                        await asyncio.sleep(delay)
-            return None  # pragma: no cover
+                try:
+                    url = await storage.async_upload(local_path, object_key)
+                    return (doc, page_num, url, local_path if is_cache_file else None)
+                except Exception as e:
+                    log_warning(f"PageImageStorage.async_upload failed for {local_path}: {e}")
+                    return None
 
-        # Phase 1: concurrent uploads with retry
+        # Phase 1: concurrent uploads
         results = await asyncio.gather(
             *[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items]
         )
@@ -3760,11 +3745,13 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         content_id = content.id or ""
         filename = content.name or "file"
         object_key = f"{content_id}/{filename}"
+        url = None
         try:
             if isinstance(file_source, Path):
                 url = self.page_image_storage.upload(str(file_source), object_key)
             else:
-                suffix = Path(filename).suffix or ".bin"
+                suffix = Path(filename).suffix.strip()
+                suffix = suffix if suffix not in ("", ".") else ".bin"
                 with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                     file_source.seek(0)
                     tmp.write(file_source.read())
@@ -3777,10 +3764,14 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                         os.unlink(tmp_path)
                     except OSError:
                         pass
+            if not url:
+                log_error(f"Failed to upload original file {filename}")
+                return docs
+
             for doc in docs:
                 doc.meta_data["file_url"] = url
         except Exception as e:
-            log_warning(f"Failed to upload original file {filename}: {e}")
+            log_error(f"Failed to upload original file {filename}: {e}", exc_info=True)
         return docs
 
     async def _async_upload_original_file(
@@ -3799,11 +3790,13 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         content_id = content.id or ""
         filename = content.name or "file"
         object_key = f"{content_id}/{filename}"
+        url = None
         try:
             if isinstance(file_source, Path):
                 url = await self.page_image_storage.async_upload(str(file_source), object_key)
             else:
-                suffix = Path(filename).suffix or ".bin"
+                suffix = Path(filename).suffix.strip()
+                suffix = suffix if suffix not in ("", ".") else ".bin"
                 with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                     file_source.seek(0)
                     tmp.write(file_source.read())
@@ -3816,10 +3809,14 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                         os.unlink(tmp_path)
                     except OSError:
                         pass
+            if not url:
+                log_warning(f"Failed to upload original file {filename}")
+                return docs
+
             for doc in docs:
                 doc.meta_data["file_url"] = url
         except Exception as e:
-            log_warning(f"Failed to upload original file {filename}: {e}")
+            log_error(f"Failed to upload original file {filename}: {e}", exc_info=True)
         return docs
 
     def _resolve_page_image(self, doc: Document, page_num: int) -> Optional[str]:
@@ -3856,12 +3853,24 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 # Derive the cache directory prefix from the stored URL, e.g.:
                 #   "https://bucket/prefix/content_id/page_3.png"
                 #   -> "https://bucket/prefix/content_id/"
-                cache_url = own_url.rsplit("/", 1)[0] + "/"
-                adj_url = f"{cache_url}page_{page_num}.png"
                 try:
-                    return storage.sign_url(adj_url, expires=self.url_signature_expires)
+                    from urllib.parse import urlparse, urlunparse
+
+                    parsed = urlparse(own_url)
+                    # Extract file extension from the path
+                    path_suffix = "." + parsed.path.rsplit(".", 1)[-1] \
+                        if "." in parsed.path.rsplit("/", 1)[-1] else ".webp"
+
+                    # Replace the filename in the path
+                    path_parts = parsed.path.rsplit("/", 1)
+                    base_path = path_parts[0] if len(path_parts) > 1 else ""
+                    new_path = f"{base_path}/page_{page_num}{path_suffix}"
+
+                    # Reconstruct the URL
+                    adj_url = urlunparse(parsed._replace(path=new_path))
+                    return storage.sign_url(str(adj_url), expires=self.url_signature_expires)
                 except Exception as e:
-                    log_warning(f"sign_url failed for {adj_url}: {e}")
+                    log_error(f"sign_url failed for {own_url} - {page_num= }: {e}", exc_info=True)
 
         # 4. Local: look up cache directory
         doc_name = doc.name or (doc.content_id or "").split("_page_")[0]
@@ -3871,9 +3880,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         # Prefer the custom cache dir stored in metadata, then fall back to default
         cache_base = doc.meta_data.get("pages_cache_dir")
         if cache_base:
-            cache_path = Path(cache_base) / f"page_{page_num}.png"
+            cache_path = Path(cache_base) / f"page_{page_num}.webp"
         else:
-            cache_path = Path.home() / ".agno" / "page_cache" / doc_name / f"page_{page_num}.png"
+            cache_path = Path.home() / ".agno" / "page_cache" / doc_name / f"page_{page_num}.webp"
 
         if cache_path.exists():
             return str(cache_path)
@@ -3915,25 +3924,42 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
     def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
         """Collect page images for retrieved documents.
 
-        For each matched document:
-        - If it is a page_image document, include that exact page.
-        - If it is a text chunk, include pages [page-window, ..., page+window].
+        Pipeline:
+        1. Scan ALL input docs; collect hit pages from docs that have page_number.
+           Limit to max_retrieval_images source files by best similarity.
+           Docs without page_number are skipped (handled by text context expansion).
+        2. If image_window_size > 0, expand to adjacent pages within the same
+           source file (±image_window_size). If bridge_page_gaps is True,
+           fill 1-page gaps between intervals.
+        3. Output ALL expanded images, ordered by source file similarity (desc),
+           then page number (asc) within each file.
 
-        Deduplicates by (doc_identifier, page_number) and caps at max_retrieval_images.
+        Deduplicates by (doc_identifier, page_number).
 
         Returns:
             List of agno.media.Image objects.
         """
         from agno.media import Image
 
-        seen: set = set()
-        image_refs: List[tuple] = []  # (doc_id, page_num, image_path)
+        max_sources = max(1, self.max_retrieval_images)
+        use_window = self.image_window_size > 0
+        use_bridge = use_window and self.bridge_page_gaps
+        docs = docs[:max_sources]
+        if not use_window:
+            _docs = []
+            for x in docs:
+                page_image_url = x.meta_data.get("page_image_url")
+                if self.page_image_storage:
+                    page_image_url = self.page_image_storage.sign_url(page_image_url)
+                _docs.append(Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url)) if page_image_url else  ...
+            return _docs
 
-        # Clamp config values to safe bounds
-        window = max(0, self.image_window_size)
-        max_images = max(1, self.max_retrieval_images)
+        # --- Phase 1: collect hit pages per source file ---
+        hit_pages_by_doc: Dict[str, Set[int]] = {}
+        best_score_by_doc: Dict[str, float] = {}
+        doc_meta_by_id: Dict[str, Tuple[int, Document]] = {}
+
         for doc in docs:
-            # Safely coerce page_number to a positive int
             raw_page = doc.meta_data.get("page_number")
             try:
                 page_num: Optional[int] = int(raw_page) if raw_page is not None else None
@@ -3941,8 +3967,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 page_num = None
             if page_num is not None and page_num <= 0:
                 page_num = None
+            if page_num is None:
+                continue
 
-            # Safely coerce total_pages
             raw_total = doc.meta_data.get("total_pages")
             try:
                 total: int = int(raw_total) if raw_total is not None else 9999
@@ -3952,41 +3979,85 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 total = 9999
 
             doc_id = doc.content_id or doc.name or ""
-            # if doc.meta_data.get("file_url") and self.page_image_storage:
-            #     doc.meta_data['file_url'] = self.page_image_storage.sign_url(
-            #         doc.meta_data.get("file_url"), expires=self.url_signature_expires
-            #     )
-            if doc.meta_data.get("doc_type") == "page_image":
-                # Direct image hit — include exactly this page
-                pages_to_add = [page_num] if page_num is not None else []
-            elif page_num is not None:
-                # Text chunk — sliding window
-                pages_to_add = list(
-                    range(
-                        max(1, page_num - window),
-                        min(total, page_num + window) + 1,
-                    )
-                )
+            hit_pages_by_doc.setdefault(doc_id, set()).add(page_num)
+
+            sim = doc.meta_data.get("similarity_score")
+            try:
+                sim_f = float(sim) if sim is not None else 0.0
+            except (TypeError, ValueError):
+                sim_f = 0.0
+            if doc_id not in best_score_by_doc or sim_f > best_score_by_doc[doc_id]:
+                best_score_by_doc[doc_id] = sim_f
+
+            # Keep the best representative doc: prefer one with page_image_url
+            existing = doc_meta_by_id.get(doc_id)
+            if existing is None:
+                doc_meta_by_id[doc_id] = (total, doc)
             else:
-                pages_to_add = []
+                old_has_url = bool(existing[1].meta_data.get("page_image_url"))
+                new_has_url = bool(doc.meta_data.get("page_image_url"))
+                if (new_has_url and not old_has_url) or (new_has_url == old_has_url and total > existing[0]):
+                    doc_meta_by_id[doc_id] = (total, doc)
 
-            for p in pages_to_add:
+        if not hit_pages_by_doc:
+            return []
+
+        # Limit: only keep top max_sources source files by best similarity
+        if len(hit_pages_by_doc) > max_sources:
+            top_ids = sorted(best_score_by_doc, key=lambda k: -best_score_by_doc[k])[:max_sources]
+            hit_pages_by_doc = {k: hit_pages_by_doc[k] for k in top_ids}
+
+        # --- Phase 2: expand windows and merge intervals per source file ---
+        expanded_pages_by_doc: Dict[str, List[int]] = {}
+
+        if use_window:
+            window = self.image_window_size
+            for doc_id, hit_pages in hit_pages_by_doc.items():
+                total = doc_meta_by_id[doc_id][0]
+                expanded: Set[int] = set(hit_pages)
+                for p in hit_pages:
+                    expanded.update(range(max(1, p - window), min(total, p + window) + 1))
+
+                if use_bridge:
+                    sorted_pages = sorted(expanded)
+                    if len(sorted_pages) >= 2:
+                        merged: Set[int] = set(sorted_pages)
+                        for i in range(len(sorted_pages) - 1):
+                            if sorted_pages[i + 1] - sorted_pages[i] == 2:
+                                merged.add(sorted_pages[i] + 1)
+                        sorted_pages = sorted(merged)
+                    expanded_pages_by_doc[doc_id] = sorted_pages
+                else:
+                    expanded_pages_by_doc[doc_id] = sorted(expanded)
+        else:
+            for doc_id, hit_pages in hit_pages_by_doc.items():
+                expanded_pages_by_doc[doc_id] = sorted(hit_pages)
+
+        # --- Phase 3: resolve all images ---
+        seen: set = set()
+        image_refs: List[tuple] = []  # (doc_id, page_num, image_path)
+
+        for doc_id, pages in expanded_pages_by_doc.items():
+            doc = doc_meta_by_id[doc_id][1]
+            for p in pages:
                 key = (doc_id, p)
-                if key not in seen:
-                    resolved = self._resolve_page_image(doc, p)
-                    if resolved:
-                        if self.verify_image_urls and resolved.startswith("http"):
-                            if not self._check_url_accessible(resolved):
-                                log_warning(f"Skipping unreachable image URL: {resolved}")
-                                continue
-                        seen.add(key)
-                        image_refs.append((doc_id, p, resolved))
+                if key in seen:
+                    continue
+                resolved = self._resolve_page_image(doc, p)
+                if not resolved:
+                    continue
+                if self.verify_image_urls and resolved.startswith("http"):
+                    if not self._check_url_accessible(resolved):
+                        log_warning(f"Skipping unreachable image URL: {resolved}")
+                        continue
+                seen.add(key)
+                image_refs.append((doc_id, p, resolved))
 
-        # Sort by (doc_id, page_number) for consistent ordering
-        # image_refs.sort(key=lambda x: (x[0], x[1]))
+        # Final order: source files by best similarity (desc), pages by page number (asc)
+        image_refs.sort(key=lambda x: (-best_score_by_doc.get(x[0], 0.0), x[0], x[1]))
         return [
             Image(url=r) if r.startswith("http") else Image(filepath=r)
-            for _, _, r in image_refs[:max_images]
+            for _, _, r in image_refs
         ]
 
     def _convert_documents_to_string(

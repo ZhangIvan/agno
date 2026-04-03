@@ -38,7 +38,8 @@ class Document:
             # → meta page_image_path (backward compat for callers not using storage)
             # → OSS URL fallback (post-cleanup or re-embed scenarios)
             image_ref = (
-                self.local_embed_path
+                self.meta_data.get("page_image_url_sign")
+                or self.local_embed_path
                 or self.meta_data.get("page_image_url")
                 or self.meta_data.get("page_image_path")
             )
@@ -60,8 +61,10 @@ class Document:
         # Image documents: embed using image embedding when available
         if self.meta_data.get("doc_type") == "page_image":
             # Priority: transient local path → meta page_image_path → OSS URL
+
             image_ref = (
-                self.local_embed_path
+                self.meta_data.get("page_image_url_sign")
+                or self.local_embed_path
                 or self.meta_data.get("page_image_url")
                 or self.meta_data.get("page_image_path")
             )

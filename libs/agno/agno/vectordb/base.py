@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from agno.knowledge.document import Document
+from agno.knowledge.storage import PageImageStorage
 from agno.utils.log import log_warning
 from agno.utils.string import generate_id
 
@@ -16,6 +17,10 @@ class VectorDb(ABC):
         name: Optional[str] = None,
         description: Optional[str] = None,
         similarity_threshold: Optional[float] = None,
+        page_image_storage: Optional[PageImageStorage] = None,
+        upload_concurrency: int = 10,
+        url_signature_expires: int = 7200,
+        **kwargs
     ):
         """Initialize base VectorDb.
 
@@ -36,6 +41,17 @@ class VectorDb(ABC):
         self.similarity_threshold = similarity_threshold
         # Last resort fallback to generate id from name if ID not specified
         self.id = id if id else generate_id(name)
+        # Optional OSS/cloud storage backend for page images.
+        # When set, page PNGs are uploaded at insert time and signed URLs are returned
+        # at retrieval time instead of local file paths.
+        self.page_image_storage: Optional[PageImageStorage] = page_image_storage  # PageImageStorage instance
+        # --- Upload settings ---
+        # Maximum number of concurrent image uploads (async path only).
+        self.upload_concurrency: int = upload_concurrency
+        # --- URL signature settings ---
+        # Expiration time in seconds for signed URLs (default 7200 = 2 hours).
+        # Only applies when page_image_storage is configured for private buckets.
+        self.url_signature_expires: int = url_signature_expires
 
     @abstractmethod
     def create(self) -> None:

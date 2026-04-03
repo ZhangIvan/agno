@@ -28,6 +28,8 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
     try:
         import fitz  # pymupdf
         from PIL import Image
+        # 关闭 MuPDF 的结构树错误警告（放在导入fitz后第一行）
+        fitz.TOOLS.mupdf_display_errors(False)
     except ImportError as e:
         if "fitz" in str(e):
             raise ImportError("`pymupdf` not installed. Please install it via `pip install pymupdf`.")

@@ -171,7 +171,7 @@ def process_image(image: Image) -> Optional[Dict[str, Any]]:
         return image_payload
 
     except (FileNotFoundError, IsADirectoryError, ValueError) as e:
-        log_error(f"Failed to process image due to invalid input: {str(e)}")
+        log_error(f"Failed to process image due to invalid input: {str(e)}; {image.url= }")
         return None  # Return None for handled validation errors
     except Exception as e:
         log_error(f"An unexpected error occurred while processing image: {str(e)}")
