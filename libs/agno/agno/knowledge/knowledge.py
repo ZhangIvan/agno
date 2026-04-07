@@ -2404,7 +2404,7 @@ class Knowledge(RemoteKnowledge):
             status_message=self._ensure_string_field(content.status_message, "content.status_message", default=""),
             created_at=created_at,
             updated_at=updated_at,
-            external_id=self._ensure_string_field(content.external_id, "content.external_id", default=""),
+            external_id=self._ensure_string_field(content.external_id, "content.external_id", default="") or None,
         )
 
     def _parse_content_status(self, status_str: Optional[str]) -> ContentStatus:
