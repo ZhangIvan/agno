@@ -93,8 +93,9 @@ class Knowledge(RemoteKnowledge):
         from agno.vectordb import VectorDb
 
         self.vector_db = cast(VectorDb, self.vector_db)
-        if self.vector_db and not getattr( self.vector_db, 'page_image_storage') and self.page_image_storage:
-            [setattr(self.vector_db, file, getattr(self, file)) for file in ["page_image_storage", "upload_concurrency", "url_signature_expires"]]
+        if self.vector_db and not getattr(self.vector_db, 'page_image_storage', None) and self.page_image_storage:
+            for attr in ("page_image_storage", "upload_concurrency", "url_signature_expires"):
+                setattr(self.vector_db, attr, getattr(self, attr))
 
         if self.vector_db and not self.vector_db.exists():
             self.vector_db.create()
@@ -1695,8 +1696,20 @@ class Knowledge(RemoteKnowledge):
         # 9. Single source - use existing logic with original content hash
         if not content.id:
             content.id = generate_id(content.content_hash or "")
-        self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True)
+        self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True, metadata=content.metadata)
+        _uploaded_file = False
+        if self.page_image_storage and bytes_content:
+            try:
+                bytes_content.seek(0)
+            except Exception:
+                log_warning("bytes_content is not seekable, skipping original file upload")
+            else:
+                read_documents = await self._async_upload_original_file(content, bytes_content, read_documents)
+                _uploaded_file = True
         await self._ahandle_vector_db_insert(content, read_documents, upsert)
+        # Update content record in DB with new metadata (file_url) AFTER successful insert
+        if _uploaded_file:
+            await self._aupdate_content(content)
 
     def _load_from_url(
         self,
@@ -1847,8 +1860,20 @@ class Knowledge(RemoteKnowledge):
         # 9. Single source - use existing logic with original content hash
         if not content.id:
             content.id = generate_id(content.content_hash or "")
-        self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True)
+        self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True, metadata=content.metadata)
+        _uploaded_file = False
+        if self.page_image_storage and bytes_content:
+            try:
+                bytes_content.seek(0)
+            except Exception:
+                log_warning("bytes_content is not seekable, skipping original file upload")
+            else:
+                read_documents = self._upload_original_file(content, bytes_content, read_documents)
+                _uploaded_file = True
         self._handle_vector_db_insert(content, read_documents, upsert)
+        # Update content record in DB with new metadata (file_url) AFTER successful insert
+        if _uploaded_file:
+            self._update_content(content)
 
     async def _aload_from_content(
         self,
@@ -2379,6 +2404,7 @@ class Knowledge(RemoteKnowledge):
             status_message=self._ensure_string_field(content.status_message, "content.status_message", default=""),
             created_at=created_at,
             updated_at=updated_at,
+            external_id=self._ensure_string_field(content.external_id, "content.external_id", default="") or None,
         )
 
     def _parse_content_status(self, status_str: Optional[str]) -> ContentStatus:
@@ -3196,9 +3222,11 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
+                import asyncio
+
                 from agno.tools.function import ToolResult
 
-                images = self._get_page_images_for_docs(docs)
+                images = await asyncio.to_thread(self._get_page_images_for_docs, docs)
                 if images:
                     return ToolResult(
                         content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
@@ -3362,9 +3390,11 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
+                import asyncio
+
                 from agno.tools.function import ToolResult
 
-                images = self._get_page_images_for_docs(docs)
+                images = await asyncio.to_thread(self._get_page_images_for_docs, docs)
                 if images:
                     return ToolResult(
                         content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
@@ -3819,16 +3849,29 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             log_error(f"Failed to upload original file {filename}: {e}", exc_info=True)
         return docs
 
-    def _resolve_page_image(self, doc: Document, page_num: int) -> Optional[str]:
+    def _resolve_page_image(self, doc: Document, page_num: int, sign_url_cache: Optional[Dict[str, str]] = None) -> Optional[str]:
         """Resolve a page image reference for the given physical page number.
 
         Returns a signed OSS URL when ``page_image_storage`` is configured,
         or a local file path otherwise.  Returns ``None`` if the image cannot
         be found.
+
+        Args:
+            doc: The document to resolve the page image for.
+            page_num: The physical page number.
+            sign_url_cache: Optional dict to cache sign_url results for reuse.
         """
         from pathlib import Path
 
         storage = self.page_image_storage
+
+        def _sign(url: str) -> Optional[str]:
+            if sign_url_cache is not None and url in sign_url_cache:
+                return sign_url_cache[url]
+            signed = storage.sign_url(url, expires=self.url_signature_expires)
+            if sign_url_cache is not None and signed is not None:
+                sign_url_cache[url] = signed
+            return signed
 
         # --- Direct match (this doc's own page) ---
         if doc.meta_data.get("page_number") == page_num:
@@ -3837,7 +3880,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = doc.meta_data.get("page_image_url")
                 if url:
                     try:
-                        return storage.sign_url(url, expires=self.url_signature_expires)
+                        return _sign(url)
                     except Exception as e:
                         log_warning(f"sign_url failed for {url}: {e}")
             # 2. Local: return path if file still exists
@@ -3868,7 +3911,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
                     # Reconstruct the URL
                     adj_url = urlunparse(parsed._replace(path=new_path))
-                    return storage.sign_url(str(adj_url), expires=self.url_signature_expires)
+                    return _sign(str(adj_url))
                 except Exception as e:
                     log_error(f"sign_url failed for {own_url} - {page_num= }: {e}", exc_info=True)
 
@@ -3908,6 +3951,31 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         except Exception:
             return False
 
+    def _batch_check_urls_accessible(self, urls: List[str]) -> Set[str]:
+        """Check multiple URLs for reachability using a single httpx client.
+
+        Returns the set of URLs that are accessible.
+        """
+        http_urls = [u for u in urls if u.startswith(("http://", "https://"))]
+        if not http_urls:
+            return set(urls)
+
+        accessible: Set[str] = set(u for u in urls if not u.startswith(("http://", "https://")))
+        try:
+            import httpx
+
+            with httpx.Client(timeout=self.verify_image_url_timeout) as client:
+                for url in http_urls:
+                    try:
+                        resp = client.head(url, follow_redirects=True)
+                        if resp.status_code < 400:
+                            accessible.add(url)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        return accessible
+
     async def _async_check_url_accessible(self, url: str) -> bool:
         """Async version of ``_check_url_accessible``."""
         if not url.startswith(("http://", "https://")):
@@ -3921,61 +3989,105 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         except Exception:
             return False
 
+    async def _async_batch_check_urls_accessible(self, urls: List[str]) -> Set[str]:
+        """Async version of ``_batch_check_urls_accessible``."""
+        http_urls = [u for u in urls if u.startswith(("http://", "https://"))]
+        if not http_urls:
+            return set(urls)
+
+        accessible: Set[str] = set(u for u in urls if not u.startswith(("http://", "https://")))
+        try:
+            import asyncio
+
+            import httpx
+
+            async with httpx.AsyncClient(timeout=self.verify_image_url_timeout) as client:
+
+                async def _check(url: str) -> Optional[str]:
+                    try:
+                        resp = await client.head(url, follow_redirects=True)
+                        if resp.status_code < 400:
+                            return url
+                    except Exception:
+                        pass
+                    return None
+
+                results = await asyncio.gather(*[_check(u) for u in http_urls])
+                accessible.update(r for r in results if r is not None)
+        except Exception:
+            pass
+        return accessible
+
     def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
         """Collect page images for retrieved documents.
 
         Pipeline:
-        1. Scan ALL input docs; collect hit pages from docs that have page_number.
-           Limit to max_retrieval_images source files by best similarity.
-           Docs without page_number are skipped (handled by text context expansion).
-        2. If image_window_size > 0, expand to adjacent pages within the same
-           source file (±image_window_size). If bridge_page_gaps is True,
-           fill 1-page gaps between intervals.
-        3. Output ALL expanded images, ordered by source file similarity (desc),
-           then page number (asc) within each file.
+        1. Select seeds: take the first max_retrieval_images from retrieved docs.
+        2. If image_window_size > 0:
+           a. Expand: add ±image_window_size adjacent pages for each seed.
+           b. Bridge: if bridge_page_gaps is True, fill 1-page gaps between expanded intervals.
+        3. If image_window_size is 0, return only the seed images.
 
         Deduplicates by (doc_identifier, page_number).
-
-        Returns:
-            List of agno.media.Image objects.
         """
         from agno.media import Image
 
-        max_sources = max(1, self.max_retrieval_images)
+        max_seeds = max(1, self.max_retrieval_images)
         use_window = self.image_window_size > 0
         use_bridge = use_window and self.bridge_page_gaps
-        docs = docs[:max_sources]
+
+        # 1. Select seeds
+        seed_docs = docs[:max_seeds]
+
+        # 2. Case: No window - return seeds directly
         if not use_window:
             _docs = []
-            for x in docs:
-                page_image_url = x.meta_data.get("page_image_url")
+            _sign_cache: Dict[str, str] = {}
+            for doc in seed_docs:
+                page_image_url = doc.meta_data.get("page_image_url")
+                if not page_image_url:
+                    continue
                 if self.page_image_storage:
-                    page_image_url = self.page_image_storage.sign_url(page_image_url)
-                _docs.append(Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url)) if page_image_url else  ...
+                    try:
+                        if page_image_url not in _sign_cache:
+                            _sign_cache[page_image_url] = self.page_image_storage.sign_url(
+                                page_image_url, expires=self.url_signature_expires
+                            )
+                        page_image_url = _sign_cache[page_image_url]
+                    except Exception as e:
+                        log_warning(f"sign_url failed for {page_image_url}: {e}")
+                        continue
+                _docs.append(
+                    Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url)
+                )
             return _docs
 
+        # 3. Case: Window expansion (±image_window_size)
         # --- Phase 1: collect hit pages per source file ---
         hit_pages_by_doc: Dict[str, Set[int]] = {}
         best_score_by_doc: Dict[str, float] = {}
         doc_meta_by_id: Dict[str, Tuple[int, Document]] = {}
 
-        for doc in docs:
+        for doc in seed_docs:
             raw_page = doc.meta_data.get("page_number")
             try:
-                page_num: Optional[int] = int(raw_page) if raw_page is not None else None
+                if raw_page is None:
+                    continue
+                # Ensure page_num is a valid positive integer
+                page_num = int(raw_page)
+                if page_num <= 0:
+                    log_warning(f"Invalid page number found in metadata: {page_num}")
+                    continue
             except (TypeError, ValueError):
-                page_num = None
-            if page_num is not None and page_num <= 0:
-                page_num = None
-            if page_num is None:
+                log_warning(f"Non-integer page number found in metadata: {raw_page}")
                 continue
 
             raw_total = doc.meta_data.get("total_pages")
             try:
                 total: int = int(raw_total) if raw_total is not None else 9999
+                if total <= 0:
+                    total = 9999
             except (TypeError, ValueError):
-                total = 9999
-            if total <= 0:
                 total = 9999
 
             doc_id = doc.content_id or doc.name or ""
@@ -4002,40 +4114,32 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         if not hit_pages_by_doc:
             return []
 
-        # Limit: only keep top max_sources source files by best similarity
-        if len(hit_pages_by_doc) > max_sources:
-            top_ids = sorted(best_score_by_doc, key=lambda k: -best_score_by_doc[k])[:max_sources]
-            hit_pages_by_doc = {k: hit_pages_by_doc[k] for k in top_ids}
-
         # --- Phase 2: expand windows and merge intervals per source file ---
         expanded_pages_by_doc: Dict[str, List[int]] = {}
+        window = self.image_window_size
+        for doc_id, hit_pages in hit_pages_by_doc.items():
+            total = doc_meta_by_id[doc_id][0]
+            expanded: Set[int] = set(hit_pages)
+            for p in hit_pages:
+                expanded.update(range(max(1, p - window), min(total, p + window) + 1))
 
-        if use_window:
-            window = self.image_window_size
-            for doc_id, hit_pages in hit_pages_by_doc.items():
-                total = doc_meta_by_id[doc_id][0]
-                expanded: Set[int] = set(hit_pages)
-                for p in hit_pages:
-                    expanded.update(range(max(1, p - window), min(total, p + window) + 1))
+            if use_bridge:
+                sorted_pages = sorted(expanded)
+                if len(sorted_pages) >= 2:
+                    merged: Set[int] = set(sorted_pages)
+                    for i in range(len(sorted_pages) - 1):
+                        # If gap is exactly 1 page (e.g., page 3 and page 5), fill it with page 4
+                        if sorted_pages[i + 1] - sorted_pages[i] == 2:
+                            merged.add(sorted_pages[i] + 1)
+                    sorted_pages = sorted(merged)
+                expanded_pages_by_doc[doc_id] = sorted_pages
+            else:
+                expanded_pages_by_doc[doc_id] = sorted(expanded)
 
-                if use_bridge:
-                    sorted_pages = sorted(expanded)
-                    if len(sorted_pages) >= 2:
-                        merged: Set[int] = set(sorted_pages)
-                        for i in range(len(sorted_pages) - 1):
-                            if sorted_pages[i + 1] - sorted_pages[i] == 2:
-                                merged.add(sorted_pages[i] + 1)
-                        sorted_pages = sorted(merged)
-                    expanded_pages_by_doc[doc_id] = sorted_pages
-                else:
-                    expanded_pages_by_doc[doc_id] = sorted(expanded)
-        else:
-            for doc_id, hit_pages in hit_pages_by_doc.items():
-                expanded_pages_by_doc[doc_id] = sorted(hit_pages)
-
-        # --- Phase 3: resolve all images ---
+        # --- Phase 3: resolve, verify, and order images ---
         seen: set = set()
         image_refs: List[tuple] = []  # (doc_id, page_num, image_path)
+        sign_url_cache: Dict[str, str] = {}
 
         for doc_id, pages in expanded_pages_by_doc.items():
             doc = doc_meta_by_id[doc_id][1]
@@ -4043,17 +4147,20 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 key = (doc_id, p)
                 if key in seen:
                     continue
-                resolved = self._resolve_page_image(doc, p)
+                resolved = self._resolve_page_image(doc, p, sign_url_cache=sign_url_cache)
                 if not resolved:
                     continue
-                if self.verify_image_urls and resolved.startswith("http"):
-                    if not self._check_url_accessible(resolved):
-                        log_warning(f"Skipping unreachable image URL: {resolved}")
-                        continue
                 seen.add(key)
                 image_refs.append((doc_id, p, resolved))
 
-        # Final order: source files by best similarity (desc), pages by page number (asc)
+        # Batch URL verification: reuse a single httpx client for all checks
+        if self.verify_image_urls:
+            http_urls = [r for _, _, r in image_refs if r.startswith(("http://", "https://"))]
+            if http_urls:
+                accessible_urls = self._batch_check_urls_accessible(http_urls)
+                image_refs = [(d, p, r) for d, p, r in image_refs if not r.startswith(("http://", "https://")) or r in accessible_urls]
+
+        # Order by source file similarity (desc), then page number (asc)
         image_refs.sort(key=lambda x: (-best_score_by_doc.get(x[0], 0.0), x[0], x[1]))
         return [
             Image(url=r) if r.startswith("http") else Image(filepath=r)
