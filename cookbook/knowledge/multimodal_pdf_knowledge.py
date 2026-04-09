@@ -30,7 +30,6 @@ from agno.knowledge.embedder.doubao import DoubaoEmbedder
 
 # Option B: AWS Bedrock Cohere Embed v4
 # from agno.knowledge.embedder.aws_bedrock import AwsBedrockEmbedder
-
 from agno.knowledge.knowledge import Knowledge
 from agno.knowledge.reader.pdf_reader import PDFReader
 from agno.models.anthropic.claude import Claude

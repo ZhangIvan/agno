@@ -20,7 +20,7 @@ class VectorDb(ABC):
         page_image_storage: Optional[PageImageStorage] = None,
         upload_concurrency: int = 10,
         url_signature_expires: int = 7200,
-        **kwargs
+        **kwargs,
     ):
         """Initialize base VectorDb.
 

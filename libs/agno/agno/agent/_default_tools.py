@@ -247,11 +247,14 @@ def create_knowledge_search_tool(
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        ref_dicts = (
+                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        )
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
                             from agno.tools.function import ToolResult
+
                             return ToolResult(
                                 content=_format_results(ref_dicts),
                                 images=images,
@@ -297,11 +300,14 @@ def create_knowledge_search_tool(
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        ref_dicts = (
+                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        )
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
                             from agno.tools.function import ToolResult
+
                             return ToolResult(
                                 content=_format_results(ref_dicts),
                                 images=images,

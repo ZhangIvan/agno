@@ -383,6 +383,7 @@ class AwsBedrockEmbedder(Embedder):
             return image_path_or_uri
         import base64
         import mimetypes
+
         mime_type, _ = mimetypes.guess_type(image_path_or_uri)
         mime_type = mime_type or "image/png"
         with open(image_path_or_uri, "rb") as f:

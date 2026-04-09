@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncIterator,
     Callable,
@@ -19,6 +20,9 @@ from typing import (
 )
 
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from agno.knowledge.storage.base import PageImageStorage
 
 from agno.agent import (
     _cli,
@@ -214,6 +218,17 @@ class Agent:
     # This allows inspecting full context in stored runs but causes quadratic storage growth.
     store_history_messages: bool = False
 
+    # --- Media Storage (OSS) ---
+    # Optional OSS/cloud storage backend for agent media (images, videos, audio, files).
+    # When set, media bytes are uploaded to OSS and only URLs are stored in the database,
+    # preventing database bloat from base64-encoded content.
+    # Uses the same PageImageStorage backends as Knowledge page images.
+    media_storage: Optional[PageImageStorage] = None
+    # Key prefix for OSS objects, e.g. "agent_media"
+    media_storage_key_prefix: str = "agent_media"
+    # URL signature expiration in seconds (default 2 hours)
+    media_url_signature_expires: int = 7200
+
     # --- System message settings ---
     # Provide the system message as a string or function
     system_message: Optional[Union[str, Callable, Message]] = None
@@ -407,6 +422,9 @@ class Agent:
         store_media: bool = True,
         store_tool_messages: bool = True,
         store_history_messages: bool = False,
+        media_storage: Optional[PageImageStorage] = None,
+        media_storage_key_prefix: str = "agent_media",
+        media_url_signature_expires: int = 7200,
         knowledge: Optional[KnowledgeProtocol] = None,
         knowledge_filters: Optional[Union[Dict[str, Any], List[FilterExpr]]] = None,
         enable_agentic_knowledge_filters: Optional[bool] = None,
@@ -552,6 +570,10 @@ class Agent:
         self.store_media = store_media
         self.store_tool_messages = store_tool_messages
         self.store_history_messages = store_history_messages
+
+        self.media_storage = media_storage
+        self.media_storage_key_prefix = media_storage_key_prefix
+        self.media_url_signature_expires = media_url_signature_expires
 
         self.knowledge = knowledge
         self.knowledge_filters = knowledge_filters

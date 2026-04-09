@@ -193,7 +193,7 @@ class PageImageStorage(ABC):
             except Exception as e:
                 last_exc = e
                 if attempt < self.max_retries:
-                    wait = self.retry_base_delay * (2 ** attempt)
+                    wait = self.retry_base_delay * (2**attempt)
                     log.warning(
                         "OSS operation failed (attempt %d/%d), retrying in %.1fs: %s  error=%s",
                         attempt + 1,

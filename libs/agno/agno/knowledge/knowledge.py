@@ -88,12 +88,11 @@ class Knowledge(RemoteKnowledge):
     # Timeout in seconds for the HEAD request when verify_image_urls is True.
     verify_image_url_timeout: float = 1.0
 
-
     def __post_init__(self):
         from agno.vectordb import VectorDb
 
         self.vector_db = cast(VectorDb, self.vector_db)
-        if self.vector_db and not getattr(self.vector_db, 'page_image_storage', None) and self.page_image_storage:
+        if self.vector_db and not getattr(self.vector_db, "page_image_storage", None) and self.page_image_storage:
             for attr in ("page_image_storage", "upload_concurrency", "url_signature_expires"):
                 setattr(self.vector_db, attr, getattr(self, attr))
 
@@ -1261,7 +1260,9 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader
         elif uri_lower.endswith(".xlsx") or uri_lower.endswith(".xls"):
             return self.excel_reader
-        elif any(uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]):
+        elif any(
+            uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]
+        ):
             return self.image_reader
         else:
             return self.text_reader
@@ -3532,9 +3533,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     return None
 
         # Phase 1: concurrent uploads
-        results = await asyncio.gather(
-            *[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items]
-        )
+        results = await asyncio.gather(*[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items])
 
         page_url_map: Dict[int, str] = {}
         local_paths: List[str] = []
@@ -3644,7 +3643,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = meta.get(url_field)
                 if url:
                     try:
-                        meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
+                        meta[url_field] = await self.page_image_storage.async_sign_url(
+                            url, expires=self.url_signature_expires
+                        )
                     except Exception as e:
                         log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
 
@@ -3691,7 +3692,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     url = meta.get(url_field)
                     if url:
                         try:
-                            meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
+                            meta[url_field] = await self.page_image_storage.async_sign_url(
+                                url, expires=self.url_signature_expires
+                            )
                         except Exception as e:
                             log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
             signed.append(ref)
@@ -3849,7 +3852,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             log_error(f"Failed to upload original file {filename}: {e}", exc_info=True)
         return docs
 
-    def _resolve_page_image(self, doc: Document, page_num: int, sign_url_cache: Optional[Dict[str, str]] = None) -> Optional[str]:
+    def _resolve_page_image(
+        self, doc: Document, page_num: int, sign_url_cache: Optional[Dict[str, str]] = None
+    ) -> Optional[str]:
         """Resolve a page image reference for the given physical page number.
 
         Returns a signed OSS URL when ``page_image_storage`` is configured,
@@ -3901,8 +3906,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
                     parsed = urlparse(own_url)
                     # Extract file extension from the path
-                    path_suffix = "." + parsed.path.rsplit(".", 1)[-1] \
-                        if "." in parsed.path.rsplit("/", 1)[-1] else ".webp"
+                    path_suffix = (
+                        "." + parsed.path.rsplit(".", 1)[-1] if "." in parsed.path.rsplit("/", 1)[-1] else ".webp"
+                    )
 
                     # Replace the filename in the path
                     path_parts = parsed.path.rsplit("/", 1)
@@ -4158,14 +4164,15 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             http_urls = [r for _, _, r in image_refs if r.startswith(("http://", "https://"))]
             if http_urls:
                 accessible_urls = self._batch_check_urls_accessible(http_urls)
-                image_refs = [(d, p, r) for d, p, r in image_refs if not r.startswith(("http://", "https://")) or r in accessible_urls]
+                image_refs = [
+                    (d, p, r)
+                    for d, p, r in image_refs
+                    if not r.startswith(("http://", "https://")) or r in accessible_urls
+                ]
 
         # Order by source file similarity (desc), then page number (asc)
         image_refs.sort(key=lambda x: (-best_score_by_doc.get(x[0], 0.0), x[0], x[1]))
-        return [
-            Image(url=r) if r.startswith("http") else Image(filepath=r)
-            for _, _, r in image_refs
-        ]
+        return [Image(url=r) if r.startswith("http") else Image(filepath=r) for _, _, r in image_refs]
 
     def _convert_documents_to_string(
         self,

@@ -67,8 +67,7 @@ class DoubaoEmbedder(Embedder):
         key = self.api_key or os.environ.get("ARK_API_KEY") or os.environ.get("DOUBAO_API_KEY")
         if not key:
             raise ValueError(
-                "Doubao API key not found. Set ARK_API_KEY environment variable "
-                "or pass api_key= to DoubaoEmbedder."
+                "Doubao API key not found. Set ARK_API_KEY environment variable or pass api_key= to DoubaoEmbedder."
             )
         return key
 
@@ -77,8 +76,7 @@ class DoubaoEmbedder(Embedder):
             from volcenginesdkarkruntime import Ark
         except ImportError:
             raise ImportError(
-                "`volcenginesdkarkruntime` not installed. "
-                "Please install it via `pip install volcenginesdkarkruntime`."
+                "`volcenginesdkarkruntime` not installed. Please install it via `pip install volcenginesdkarkruntime`."
             )
         params: Dict[str, Any] = {"api_key": self._get_api_key()}
         if self.base_url:
@@ -90,8 +88,7 @@ class DoubaoEmbedder(Embedder):
             from volcenginesdkarkruntime import AsyncArk
         except ImportError:
             raise ImportError(
-                "`volcenginesdkarkruntime` not installed. "
-                "Please install it via `pip install volcenginesdkarkruntime`."
+                "`volcenginesdkarkruntime` not installed. Please install it via `pip install volcenginesdkarkruntime`."
             )
         params: Dict[str, Any] = {"api_key": self._get_api_key()}
         if self.base_url:
@@ -161,9 +158,13 @@ class DoubaoEmbedder(Embedder):
             if hasattr(response, "usage") and response.usage is not None:
                 u = response.usage
                 usage = {
-                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "prompt_tokens": u.get("prompt_tokens")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens", None),
                     "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
-                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens_details", None),
                 }
             return embedding, usage
         except Exception as e:
@@ -196,9 +197,13 @@ class DoubaoEmbedder(Embedder):
             if hasattr(response, "usage") and response.usage is not None:
                 u = response.usage
                 usage = {
-                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "prompt_tokens": u.get("prompt_tokens")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens", None),
                     "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
-                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens_details", None),
                 }
             return embedding, usage
         except Exception as e:
@@ -244,9 +249,13 @@ class DoubaoEmbedder(Embedder):
             if hasattr(response, "usage") and response.usage is not None:
                 u = response.usage
                 usage = {
-                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "prompt_tokens": u.get("prompt_tokens")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens", None),
                     "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
-                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens_details", None),
                 }
             return embedding, usage
         except Exception as e:
@@ -269,7 +278,9 @@ class DoubaoEmbedder(Embedder):
             log_warning(f"DoubaoEmbedder.async_get_image_embedding failed for {image_path}: {e}")
             return None
 
-    async def async_get_image_embedding_and_usage(self, image_path: str) -> Tuple[Optional[List[float]], Optional[Dict]]:
+    async def async_get_image_embedding_and_usage(
+        self, image_path: str
+    ) -> Tuple[Optional[List[float]], Optional[Dict]]:
         """Async get image embedding and token usage."""
         try:
             image_url = await asyncio.to_thread(self._file_path_to_image_url, image_path)
@@ -284,9 +295,13 @@ class DoubaoEmbedder(Embedder):
             if hasattr(response, "usage") and response.usage is not None:
                 u = response.usage
                 usage = {
-                    "prompt_tokens": u.get("prompt_tokens") if isinstance(u, dict) else getattr(u, "prompt_tokens", None),
+                    "prompt_tokens": u.get("prompt_tokens")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens", None),
                     "total_tokens": u.get("total_tokens") if isinstance(u, dict) else getattr(u, "total_tokens", None),
-                    "prompt_tokens_details": u.get("prompt_tokens_details") if isinstance(u, dict) else getattr(u, "prompt_tokens_details", None),
+                    "prompt_tokens_details": u.get("prompt_tokens_details")
+                    if isinstance(u, dict)
+                    else getattr(u, "prompt_tokens_details", None),
                 }
             return embedding, usage
         except Exception as e:

@@ -67,7 +67,10 @@ class DocxReader(Reader):
                 docx_document = DocxDocument(file)
                 doc_name = name or getattr(file, "name", "docx_file").split(".")[0]
                 if self.capture_pages:
-                    import os, shutil, tempfile
+                    import os
+                    import shutil
+                    import tempfile
+
                     if hasattr(file, "seek"):
                         file.seek(0)
                     _tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
@@ -95,6 +98,7 @@ class DocxReader(Reader):
             if self.capture_pages and file_path and result:
                 try:
                     from agno.knowledge.reader.page_capture import capture_docx_pages, get_page_cache_dir
+
                     cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
                     page_images = capture_docx_pages(file_path, cache_dir, dpi=self.image_dpi)
                     total_pages = len(page_images)
@@ -142,6 +146,7 @@ class DocxReader(Reader):
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass

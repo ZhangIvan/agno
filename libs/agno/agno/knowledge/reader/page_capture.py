@@ -28,6 +28,7 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
     try:
         import fitz  # pymupdf
         from PIL import Image
+
         # 关闭 MuPDF 的结构树错误警告（放在导入fitz后第一行）
         fitz.TOOLS.mupdf_display_errors(False)
     except ImportError as e:
@@ -78,7 +79,7 @@ def capture_pdf_pages(pdf_path: str, output_dir: str, dpi: int = 150, optimize: 
                     quality=82,  # 质量 85 最均衡（文档足够清晰）
                     lossless=False,  # 有损 = 体积暴减
                     method=4,  # 压缩速度与效果平衡
-                    optimize=True  # 额外优化文件大小
+                    optimize=True,  # 额外优化文件大小
                 )
             else:
                 # img.save(image_path, "PNG")

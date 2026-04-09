@@ -137,6 +137,11 @@ def get_session(
         # Re-sign OSS URLs in loaded session references
         if loaded_session is not None:
             _re_sign_urls_in_session(agent, loaded_session)
+            # Sign media URLs from OSS storage
+            if agent.media_storage is not None:
+                from agno.utils.media_storage import sign_media_in_session
+
+                sign_media_in_session(agent, loaded_session)
 
         # Cache the session if relevant
         if loaded_session is not None and agent.cache_session:
@@ -210,8 +215,11 @@ async def aget_session(
         # Re-sign OSS URLs in loaded session references
         if loaded_session is not None:
             await _async_re_sign_urls_in_session(agent, loaded_session)
+            # Sign media URLs from OSS storage
+            if agent.media_storage is not None:
+                from agno.utils.media_storage import async_sign_media_in_session
 
-        # Cache the session if relevant
+                await async_sign_media_in_session(agent, loaded_session)
         if loaded_session is not None and agent.cache_session:
             agent._cached_session = loaded_session  # type: ignore
 
@@ -243,9 +251,7 @@ def _strip_signed_urls_from_session(agent: Agent, session: Union[AgentSession, T
             run.references = strip_fn(refs)
 
 
-def _re_sign_urls_in_session(
-    agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]
-) -> None:
+def _re_sign_urls_in_session(agent: Agent, session: Union[AgentSession, TeamSession, WorkflowSession]) -> None:
     """Re-sign OSS URLs in run references after loading from DB.
 
     The stored references contain unsigned base URLs; this restores
@@ -313,6 +319,11 @@ def save_session(agent: Agent, session: Union[AgentSession, TeamSession, Workflo
 
         # Strip signed URLs before persisting so only base URLs are stored
         _strip_signed_urls_from_session(agent, session)
+        # Upload media bytes to OSS before persisting to database
+        if agent.media_storage is not None:
+            from agno.utils.media_storage import upload_media_in_session
+
+            upload_media_in_session(agent, session)
         _storage.upsert_session(agent, session=session)
         log_debug(f"Created or updated AgentSession record: {session.session_id}")
 
@@ -336,6 +347,11 @@ async def asave_session(agent: Agent, session: Union[AgentSession, TeamSession, 
             session.session_data["session_state"].pop("current_run_id", None)
         # Strip signed URLs before persisting so only base URLs are stored
         _strip_signed_urls_from_session(agent, session)
+        # Upload media bytes to OSS before persisting to database
+        if agent.media_storage is not None:
+            from agno.utils.media_storage import async_upload_media_in_session
+
+            await async_upload_media_in_session(agent, session)
         if _init.has_async_db(agent):
             await _storage.aupsert_session(agent, session=session)
         else:

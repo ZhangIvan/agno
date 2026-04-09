@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.storage.exceptions import OSSUploadError, OSSDeleteError
+from agno.knowledge.storage.exceptions import OSSDeleteError, OSSUploadError
 from agno.utils.log import log_debug
 
 
@@ -114,7 +114,9 @@ class AliyunOSSStorage(PageImageStorage):
             filename = key.rsplit("/", 1)[-1] if "/" in key else key
         disposition = f'attachment; filename="{filename}"'
         return self._get_bucket().sign_url(
-            "GET", key, expires,
+            "GET",
+            key,
+            expires,
             params={"response-content-disposition": disposition},
         )
 
@@ -150,7 +152,7 @@ class AliyunOSSStorage(PageImageStorage):
         for proto in ["https://", "http://"]:
             prefix = f"{proto}{base}/"
             if url.startswith(prefix):
-                return url[len(prefix):].split("?")[0]
+                return url[len(prefix) :].split("?")[0]
 
         # Custom domain format
         if self.custom_domain:
@@ -158,7 +160,7 @@ class AliyunOSSStorage(PageImageStorage):
             for proto in ["https://", "http://"]:
                 prefix = f"{proto}{domain_stripped}/"
                 if url.startswith(prefix):
-                    return url[len(prefix):].split("?")[0]
+                    return url[len(prefix) :].split("?")[0]
 
         return None
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.storage.exceptions import OSSUploadError, OSSDeleteError
+from agno.knowledge.storage.exceptions import OSSDeleteError, OSSUploadError
 from agno.utils.log import log_debug
 
 
@@ -107,7 +107,9 @@ class ByteDanceTOSStorage(PageImageStorage):
             return base_url
         return self.get_signed_url(key, expires)
 
-    def get_signed_url(self, key: str, expires: int = 3600, header: Optional[Dict] = None, query: Optional[Dict] = None) -> str:
+    def get_signed_url(
+        self, key: str, expires: int = 3600, header: Optional[Dict] = None, query: Optional[Dict] = None
+    ) -> str:
         log_debug(f"ByteDanceTOS sign_url: {key}  expires={expires}s")
         try:
             from tos.enum import HttpMethodType
@@ -168,14 +170,14 @@ class ByteDanceTOSStorage(PageImageStorage):
             for proto in ["https://", "http://"]:
                 prefix = f"{proto}{domain_stripped}/"
                 if url.startswith(prefix):
-                    return url[len(prefix):].split("?")[0]
+                    return url[len(prefix) :].split("?")[0]
 
         # Standard format: https://{bucket}.{endpoint}/{key}
         base = f"{self.bucket_name}.{self._strip_protocol(self.endpoint)}"
         for proto in ["https://", "http://"]:
             prefix = f"{proto}{base}/"
             if url.startswith(prefix):
-                return url[len(prefix):].split("?")[0]
+                return url[len(prefix) :].split("?")[0]
 
         return None
 
