@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import io
+import os
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -1019,7 +1020,6 @@ class Knowledge(RemoteKnowledge):
             bool: True if file should be included, False otherwise
         """
         import fnmatch
-        import os
 
         file_name = os.path.basename(file_path)
 
@@ -3176,12 +3176,18 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             if self.use_page_images and docs:
                 from agno.tools.function import ToolResult
+                from urllib.parse import urlparse
 
-                images = self._get_page_images_for_docs(docs)
-                if images:
+                image_results = self._get_page_images_for_docs(docs)
+                if image_results:
+                    _images = [img for img, _, _ in image_results]
+                    _source_info = ", ".join(
+                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
+                        for img, name, page in image_results
+                    )
                     return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
-                        images=images,
+                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
+                        images=_images,
                     )
 
             return self._convert_documents_to_string(docs, agent)
@@ -3223,14 +3229,19 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             if self.use_page_images and docs:
                 import asyncio
-
                 from agno.tools.function import ToolResult
+                from urllib.parse import urlparse
 
-                images = await asyncio.to_thread(self._get_page_images_for_docs, docs)
-                if images:
+                image_results = await asyncio.to_thread(self._get_page_images_for_docs, docs)
+                if image_results:
+                    _images = [img for img, _, _ in image_results]
+                    _source_info = ", ".join(
+                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
+                        for img, name, page in image_results
+                    )
                     return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
-                        images=images,
+                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
+                        images=_images,
                     )
 
             return self._convert_documents_to_string(docs, agent)
@@ -3322,12 +3333,18 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             if self.use_page_images and docs:
                 from agno.tools.function import ToolResult
+                from urllib.parse import urlparse
 
-                images = self._get_page_images_for_docs(docs)
-                if images:
+                image_results = self._get_page_images_for_docs(docs)
+                if image_results:
+                    _images = [img for img, _, _ in image_results]
+                    _source_info = ", ".join(
+                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
+                        for img, name, page in image_results
+                    )
                     return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
-                        images=images,
+                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
+                        images=_images,
                     )
 
             return self._convert_documents_to_string(docs, agent)
@@ -3391,14 +3408,19 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
             if self.use_page_images and docs:
                 import asyncio
-
                 from agno.tools.function import ToolResult
+                from urllib.parse import urlparse
 
-                images = await asyncio.to_thread(self._get_page_images_for_docs, docs)
-                if images:
+                image_results = await asyncio.to_thread(self._get_page_images_for_docs, docs)
+                if image_results:
+                    _images = [img for img, _, _ in image_results]
+                    _source_info = ", ".join(
+                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
+                        for img, name, page in image_results
+                    )
                     return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(images)} pages.",
-                        images=images,
+                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
+                        images=_images,
                     )
 
             return self._convert_documents_to_string(docs, agent)
@@ -4018,7 +4040,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             pass
         return accessible
 
-    def _get_page_images_for_docs(self, docs: List[Document]) -> List[Any]:
+    def _get_page_images_for_docs(self, docs: List[Document]) -> List[Tuple[Any, str, int]]:
         """Collect page images for retrieved documents.
 
         Pipeline:
@@ -4057,9 +4079,16 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     except Exception as e:
                         log_warning(f"sign_url failed for {page_image_url}: {e}")
                         continue
-                _docs.append(
-                    Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url)
-                )
+                page_num = doc.meta_data.get("page_number", 0)
+                try:
+                    page_num = int(page_num)
+                except (TypeError, ValueError):
+                    page_num = 0
+                _docs.append((
+                    Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url),
+                    doc.name or "",
+                    page_num,
+                ))
             return _docs
 
         # 3. Case: Window expansion (±image_window_size)
@@ -4163,8 +4192,12 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         # Order by source file similarity (desc), then page number (asc)
         image_refs.sort(key=lambda x: (-best_score_by_doc.get(x[0], 0.0), x[0], x[1]))
         return [
-            Image(url=r) if r.startswith("http") else Image(filepath=r)
-            for _, _, r in image_refs
+            (
+                Image(url=r) if r.startswith("http") else Image(filepath=r),
+                doc_meta_by_id[d][1].name or "",
+                p,
+            )
+            for d, p, r in image_refs
         ]
 
     def _convert_documents_to_string(

@@ -2948,32 +2948,45 @@ class Model(ABC):
         all_videos: List[Video] = []
         all_audio: List[Audio] = []
         all_files: List[File] = []
+        media_source_contents: List[str] = []
 
         for result_message in function_call_results:
+            has_media = False
             if result_message.images:
                 all_images.extend(result_message.images)
                 # Remove images from tool message to avoid errors on the LLMs
                 result_message.images = None
+                has_media = True
 
             if result_message.videos:
                 all_videos.extend(result_message.videos)
                 result_message.videos = None
+                has_media = True
 
             if result_message.audio:
                 all_audio.extend(result_message.audio)
                 result_message.audio = None
+                has_media = True
 
             if result_message.files:
                 all_files.extend(result_message.files)
                 result_message.files = None
+                has_media = True
+
+            if has_media and result_message.content:
+                media_source_contents.append(result_message.content)
 
         # Only add media message if we should send media to model
         if send_media_to_model and (all_images or all_videos or all_audio or all_files):
             # If we have media artifacts, add a follow-up "user" message instead of a "tool"
             # message with the media artifacts which throws error for some models
+            source_info = " ".join(media_source_contents) if media_source_contents else ""
+            content_parts = ["[The following media content is from the tool execution results above]"]
+            if source_info:
+                content_parts.append(source_info)
             media_message = Message(
                 role="user",
-                content="Take note of the following content",
+                content=" ".join(content_parts),
                 images=all_images if all_images else None,
                 videos=all_videos if all_videos else None,
                 audio=all_audio if all_audio else None,

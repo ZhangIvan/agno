@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -12,6 +13,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from agno.agent.agent import Agent
@@ -252,9 +254,14 @@ def create_knowledge_search_tool(
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
                             from agno.tools.function import ToolResult
+                            _images = [img for img, _, _ in images]
+                            _source_info = ", ".join(
+                                f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
+                                for img, name, page in images
+                            )
                             return ToolResult(
-                                content=_format_results(ref_dicts),
-                                images=images,
+                                content=f"Found {len(images)} relevant document sections across {len(_images)} pages. [{_source_info}]",
+                                images=_images,
                             )
                     return _format_results(ref_dicts if raw_docs else None)
 
@@ -302,9 +309,14 @@ def create_knowledge_search_tool(
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
                             from agno.tools.function import ToolResult
+                            _images = [img for img, _, _ in images]
+                            _source_info = ", ".join(
+                                f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
+                                for img, name, page in images
+                            )
                             return ToolResult(
-                                content=_format_results(ref_dicts),
-                                images=images,
+                                content=f"Found {len(images)} relevant document sections across {len(_images)} pages. [{_source_info}]",
+                                images=_images,
                             )
                     return _format_results(ref_dicts if raw_docs else None)
 
