@@ -52,7 +52,7 @@ class BaiduSearchTools(Toolkit):
 
         super().__init__(name="baidusearch", tools=tools, **kwargs)
 
-    def baidu_search(self, query: str, max_results: int = 5, language: str = "zh") -> str:
+    def baidu_search(self, query: str, max_results: Optional[int], language: Optional[str] = "zh") -> str:
         """Execute Baidu search and return results
 
         Args:
@@ -63,8 +63,8 @@ class BaiduSearchTools(Toolkit):
         Returns:
             str: A JSON formatted string containing the search results.
         """
-        max_results = self.fixed_max_results or max_results
-        language = self.fixed_language or language
+        max_results = self.fixed_max_results or max_results or 5
+        language = self.fixed_language or language or "zh"
 
         if len(language) != 2:
             try:
@@ -86,4 +86,4 @@ class BaiduSearchTools(Toolkit):
                     "rank": str(idx),
                 }
             )
-        return json.dumps(res, indent=2)
+        return json.dumps(res, indent=2, ensure_ascii=False)
