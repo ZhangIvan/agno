@@ -38,19 +38,25 @@ class ByteDanceTOSStorage(PageImageStorage):
     custom_domain: str = field(default="", repr=False)
     # Whether the bucket is private
     is_private: bool = field(default=True, repr=False)
+    # Cached client (not serialized)
+    _client: object = field(default=None, repr=False, init=False, compare=False)
 
     def _get_client(self):
+        if self._client is not None:
+            return self._client
         try:
             import tos
         except ImportError:
             raise ImportError("`tos` not installed. Run: pip install tos")
-        return tos.TosClientV2(
+        self._client = tos.TosClientV2(
             ak=self.access_key,
             sk=self.secret_key,
             endpoint=self._strip_protocol(self.endpoint),
             region=self.region,
             max_retry_count=3,
+            is_custom_domain=True if self.custom_domain else False
         )
+        return self._client
 
     def _full_key(self, object_key: str) -> str:
         return f"{self.key_prefix}{object_key}" if self.key_prefix else object_key

@@ -1631,6 +1631,7 @@ class Knowledge(RemoteKnowledge):
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(response.content)
                 _tmp_file_path = tmp.name
+                content.size = os.path.getsize(_tmp_file_path)
             file_source = Path(_tmp_file_path)
             content.file_type = file_extension
 
@@ -1725,7 +1726,7 @@ class Knowledge(RemoteKnowledge):
             read_documents = await self._async_upload_original_file(content, file_source, read_documents)
             _uploaded_file = True
         await self._ahandle_vector_db_insert(content, read_documents, upsert)
-        # Update content record in DB with new metadata (file_url) AFTER successful insert
+        # Update content record in DB with new metadata (file_url, size, file_type) AFTER successful insert
         if _uploaded_file:
             await self._aupdate_content(content)
         if _tmp_file_path:
@@ -1816,6 +1817,7 @@ class Knowledge(RemoteKnowledge):
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(response.content)
                 _tmp_file_path = tmp.name
+                content.size = os.path.getsize(_tmp_file_path)
             file_source = Path(_tmp_file_path)
             content.file_type = file_extension
 
@@ -1911,7 +1913,7 @@ class Knowledge(RemoteKnowledge):
             read_documents = self._upload_original_file(content, file_source, read_documents)
             _uploaded_file = True
         self._handle_vector_db_insert(content, read_documents, upsert)
-        # Update content record in DB with new metadata (file_url) AFTER successful insert
+        # Update content record in DB with new metadata (file_url, size, file_type) AFTER successful insert
         if _uploaded_file:
             self._update_content(content)
         if _tmp_file_path:
@@ -2619,6 +2621,12 @@ class Knowledge(RemoteKnowledge):
                 content_row.external_id = self._ensure_string_field(
                     content.external_id, "content.external_id", default=""
                 )
+            if content.size is not None:
+                content_row.size = content.size
+            if content.file_type is not None:
+                content_row.file_type = self._ensure_string_field(
+                    content.file_type, "content.file_type", default=""
+                )
             content_row.updated_at = int(time.time())
             self.contents_db.upsert_knowledge_content(knowledge_row=content_row)
 
@@ -2665,6 +2673,12 @@ class Knowledge(RemoteKnowledge):
             if content.external_id is not None:
                 content_row.external_id = self._ensure_string_field(
                     content.external_id, "content.external_id", default=""
+                )
+            if content.size is not None:
+                content_row.size = content.size
+            if content.file_type is not None:
+                content_row.file_type = self._ensure_string_field(
+                    content.file_type, "content.file_type", default=""
                 )
 
             content_row.updated_at = int(time.time())
