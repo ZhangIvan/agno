@@ -1579,11 +1579,12 @@ class Knowledge(RemoteKnowledge):
 
         # Set name from URL if not provided
         if not content.name and content.url:
-            from urllib.parse import urlparse
+            from urllib.parse import unquote, urlparse
 
             parsed = urlparse(content.url)
             url_path = Path(parsed.path)
-            content.name = url_path.name if url_path.name else content.url
+            raw_name = url_path.name if url_path.name else ""
+            content.name = unquote(raw_name) if raw_name else content.url
 
         # 1. Add content to contents database
         await self._ainsert_contents_db(content)
@@ -1612,25 +1613,37 @@ class Knowledge(RemoteKnowledge):
             await self._aupdate_content(content)
             log_warning(f"Invalid URL: {content.url} - {str(e)}")
         # 3. Fetch and load content if file has an extension
-        url_path = Path(parsed_url.path)
+        from urllib.parse import unquote as _unquote
+
+        url_path = Path(_unquote(parsed_url.path))
         file_extension = url_path.suffix.lower()
 
-        bytes_content = None
+        file_source: Optional[Union[Path, BytesIO]] = None
+        _tmp_file_path: Optional[str] = None
         if file_extension:
+            import os
+            import tempfile
+
             async with AsyncClient() as client:
                 response = await async_fetch_with_retry(content.url, client=client)
-            bytes_content = BytesIO(response.content)
+            # Write directly to temp file — reader and upload share it, avoiding redundant disk writes
+            suffix = file_extension if file_extension else ".bin"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(response.content)
+                _tmp_file_path = tmp.name
+            file_source = Path(_tmp_file_path)
+            content.file_type = file_extension
 
-        # 4. Select reader
-        name = content.name if content.name else content.url
-        if file_extension:
-            reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
-            if default_name and file_extension == ".csv":
-                name = basename(parsed_url.path) or default_name
-        else:
-            reader = content.reader or self.website_reader
-        # 5. Read content
         try:
+            # 4. Select reader
+            name = content.name if content.name else content.url
+            if file_extension:
+                reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
+                if default_name and file_extension == ".csv":
+                    name = basename(parsed_url.path) or default_name
+            else:
+                reader = content.reader or self.website_reader
+            # 5. Read content
             read_documents = []
             if reader is not None:
                 # Special handling for YouTubeReader
@@ -1638,10 +1651,15 @@ class Knowledge(RemoteKnowledge):
                     read_documents = await reader.async_read(content.url, name=name)
                 else:
                     password = content.auth.password if content.auth and content.auth.password is not None else None
-                    source = bytes_content if bytes_content else content.url
+                    source = file_source if file_source else content.url
                     read_documents = await self._aread(reader, source, name=name, password=password)
 
         except Exception as e:
+            if _tmp_file_path:
+                try:
+                    os.unlink(_tmp_file_path)
+                except OSError:
+                    pass
             log_error(f"Error reading URL: {content.url} - {str(e)}", exc_info=True)
             content.status = ContentStatus.FAILED
             content.status_message = f"Error reading URL: {content.url} - {str(e)}"
@@ -1691,6 +1709,11 @@ class Knowledge(RemoteKnowledge):
 
             content.status = ContentStatus.COMPLETED
             await self._aupdate_content(content)
+            if _tmp_file_path:
+                try:
+                    os.unlink(_tmp_file_path)
+                except OSError:
+                    pass
             return
 
         # 9. Single source - use existing logic with original content hash
@@ -1698,18 +1721,18 @@ class Knowledge(RemoteKnowledge):
             content.id = generate_id(content.content_hash or "")
         self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True, metadata=content.metadata)
         _uploaded_file = False
-        if self.page_image_storage and bytes_content:
-            try:
-                bytes_content.seek(0)
-            except Exception:
-                log_warning("bytes_content is not seekable, skipping original file upload")
-            else:
-                read_documents = await self._async_upload_original_file(content, bytes_content, read_documents)
-                _uploaded_file = True
+        if self.page_image_storage and file_source:
+            read_documents = await self._async_upload_original_file(content, file_source, read_documents)
+            _uploaded_file = True
         await self._ahandle_vector_db_insert(content, read_documents, upsert)
         # Update content record in DB with new metadata (file_url) AFTER successful insert
         if _uploaded_file:
             await self._aupdate_content(content)
+        if _tmp_file_path:
+            try:
+                os.unlink(_tmp_file_path)
+            except OSError:
+                pass
 
     def _load_from_url(
         self,
@@ -1742,11 +1765,12 @@ class Knowledge(RemoteKnowledge):
 
         # Set name from URL if not provided
         if not content.name and content.url:
-            from urllib.parse import urlparse
+            from urllib.parse import unquote, urlparse
 
             parsed = urlparse(content.url)
             url_path = Path(parsed.path)
-            content.name = url_path.name if url_path.name else content.url
+            raw_name = url_path.name if url_path.name else ""
+            content.name = unquote(raw_name) if raw_name else content.url
 
         # 1. Add content to contents database
         self._insert_contents_db(content)
@@ -1776,25 +1800,36 @@ class Knowledge(RemoteKnowledge):
             log_warning(f"Invalid URL: {content.url} - {str(e)}")
 
         # 3. Fetch and load content if file has an extension
-        url_path = Path(parsed_url.path)
+        from urllib.parse import unquote as _unquote
+
+        url_path = Path(_unquote(parsed_url.path))
         file_extension = url_path.suffix.lower()
 
-        bytes_content = None
+        file_source: Optional[Union[Path, BytesIO]] = None
+        _tmp_file_path: Optional[str] = None
         if file_extension:
+            import os
+            import tempfile
+
             response = fetch_with_retry(content.url)
-            bytes_content = BytesIO(response.content)
+            suffix = file_extension if file_extension else ".bin"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(response.content)
+                _tmp_file_path = tmp.name
+            file_source = Path(_tmp_file_path)
+            content.file_type = file_extension
 
-        # 4. Select reader
-        name = content.name if content.name else content.url
-        if file_extension:
-            reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
-            if default_name and file_extension == ".csv":
-                name = basename(parsed_url.path) or default_name
-        else:
-            reader = content.reader or self.website_reader
-
-        # 5. Read content
         try:
+            # 4. Select reader
+            name = content.name if content.name else content.url
+            if file_extension:
+                reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
+                if default_name and file_extension == ".csv":
+                    name = basename(parsed_url.path) or default_name
+            else:
+                reader = content.reader or self.website_reader
+
+            # 5. Read content
             read_documents = []
             if reader is not None:
                 # Special handling for YouTubeReader
@@ -1802,10 +1837,15 @@ class Knowledge(RemoteKnowledge):
                     read_documents = reader.read(content.url, name=name)
                 else:
                     password = content.auth.password if content.auth and content.auth.password is not None else None
-                    source = bytes_content if bytes_content else content.url
+                    source = file_source if file_source else content.url
                     read_documents = self._read(reader, source, name=name, password=password)
 
         except Exception as e:
+            if _tmp_file_path:
+                try:
+                    os.unlink(_tmp_file_path)
+                except OSError:
+                    pass
             log_error(f"Error reading URL: {content.url} - {str(e)}", exc_info=True)
             content.status = ContentStatus.FAILED
             content.status_message = f"Error reading URL: {content.url} - {str(e)}"
@@ -1855,6 +1895,11 @@ class Knowledge(RemoteKnowledge):
 
             content.status = ContentStatus.COMPLETED
             self._update_content(content)
+            if _tmp_file_path:
+                try:
+                    os.unlink(_tmp_file_path)
+                except OSError:
+                    pass
             return
 
         # 9. Single source - use existing logic with original content hash
@@ -1862,18 +1907,18 @@ class Knowledge(RemoteKnowledge):
             content.id = generate_id(content.content_hash or "")
         self._prepare_documents_for_insert(read_documents, content.id, calculate_sizes=True, metadata=content.metadata)
         _uploaded_file = False
-        if self.page_image_storage and bytes_content:
-            try:
-                bytes_content.seek(0)
-            except Exception:
-                log_warning("bytes_content is not seekable, skipping original file upload")
-            else:
-                read_documents = self._upload_original_file(content, bytes_content, read_documents)
-                _uploaded_file = True
+        if self.page_image_storage and file_source:
+            read_documents = self._upload_original_file(content, file_source, read_documents)
+            _uploaded_file = True
         self._handle_vector_db_insert(content, read_documents, upsert)
         # Update content record in DB with new metadata (file_url) AFTER successful insert
         if _uploaded_file:
             self._update_content(content)
+        if _tmp_file_path:
+            try:
+                os.unlink(_tmp_file_path)
+            except OSError:
+                pass
 
     async def _aload_from_content(
         self,

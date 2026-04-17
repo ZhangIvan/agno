@@ -1212,7 +1212,7 @@ class PgVector(VectorDb):
                     )
                 )
 
-            if self.reranker:
+            if self.reranker and len(search_results):
                 search_results = self.reranker.rerank(query=query, documents=search_results)
 
             log_info(f"Found {len(search_results)} documents")
