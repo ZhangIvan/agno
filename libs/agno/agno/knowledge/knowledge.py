@@ -1633,7 +1633,9 @@ class Knowledge(RemoteKnowledge):
                 _tmp_file_path = tmp.name
                 content.size = os.path.getsize(_tmp_file_path)
             file_source = Path(_tmp_file_path)
-            content.file_type = file_extension
+            from agno.knowledge.utils import get_content_type
+
+            content.file_type = get_content_type(_tmp_file_path)
 
         try:
             # 4. Select reader
@@ -1819,7 +1821,9 @@ class Knowledge(RemoteKnowledge):
                 _tmp_file_path = tmp.name
                 content.size = os.path.getsize(_tmp_file_path)
             file_source = Path(_tmp_file_path)
-            content.file_type = file_extension
+            from agno.knowledge.utils import get_content_type
+
+            content.file_type = get_content_type(_tmp_file_path)
 
         try:
             # 4. Select reader
