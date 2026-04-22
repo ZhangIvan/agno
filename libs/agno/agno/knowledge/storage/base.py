@@ -4,9 +4,11 @@ import asyncio
 import logging
 import mimetypes
 import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Callable, Optional, TypeVar
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Dict, Optional, TypeVar
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +156,71 @@ class PageImageStorage(ABC):
         Returns:
             True if the object exists.
         """
+
+    # ------------------------------------------------------------------
+    # STS / Upload credentials (for frontend direct upload)
+    # ------------------------------------------------------------------
+
+    def _generate_upload_object_key(self, prefix: Optional[str], **kwargs: Any) -> str:
+        """Generate a unique object key for upload."""
+        file_ext = kwargs.get("file_extension", "")
+        if prefix:
+            return f"{prefix.rstrip('/')}/{uuid.uuid4().hex}{file_ext}"
+        return f"{uuid.uuid4().hex}{file_ext}"
+
+    def _compute_expires_at(self, expires: int) -> str:
+        """Compute ISO 8601 expiration timestamp."""
+        return (datetime.now(timezone.utc) + timedelta(seconds=expires)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _build_credential_response(
+        self,
+        provider: str,
+        upload_url: str,
+        object_key: str,
+        content_type: Optional[str],
+        expires_at: str,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Build the standard credential response dict."""
+        result: Dict[str, Any] = {
+            "provider": provider,
+            "upload_url": upload_url,
+            "object_key": object_key,
+            "object_url": self._base_url(object_key),
+            "headers": {"Content-Type": content_type} if content_type else {},
+            "expires_at": expires_at,
+        }
+        if extra:
+            result.update(extra)
+        return result
+
+    def get_upload_credentials(
+        self,
+        prefix: Optional[str] = None,
+        expires: int = 3600,
+        content_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Return temporary credentials for frontend direct upload.
+
+        Subclasses should override to generate provider-specific presigned URLs.
+        The default implementation raises NotImplementedError.
+
+        Args:
+            prefix: Optional key prefix to restrict uploads to.
+            expires: Credential validity in seconds (default 3600).
+            content_type: Optional allowed content type restriction.
+
+        Returns:
+            Dictionary with provider-specific credentials and upload endpoint info.
+
+        Raises:
+            NotImplementedError: If this storage backend does not support STS credentials.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support STS temporary credentials. "
+            "Implement get_upload_credentials() to enable frontend direct upload."
+        )
 
     # ------------------------------------------------------------------
     # Key / URL utilities

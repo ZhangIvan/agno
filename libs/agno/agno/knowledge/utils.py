@@ -1,12 +1,59 @@
+import json
+import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.reader.reader_factory import ReaderFactory
 from agno.knowledge.types import ContentType
 from agno.utils.log import log_debug
 
-RESERVED_AGNO_KEY = "_agno"
+RESERVED_AGNO_KEY = "_ag_os"
+
+
+def format_image_meta(meta) -> str:
+    """Format metadata dict into a concise Chinese string for image source descriptions.
+
+    Returns empty string if *meta* is falsy, otherwise a JSON dump prefixed with
+    ``", 附加信息: "``.
+    """
+    if not meta:
+        return ""
+    return f", 附加信息: {json.dumps(meta, ensure_ascii=False)}"
+
+
+def build_page_image_tool_result(
+    image_results: List[Tuple[Any, str, int, Dict[str, Any]]],
+) -> Any:
+    """Build a ToolResult from page image results.
+
+    Args:
+        image_results: List of (Image, doc_name, page_number, meta_data) tuples
+            as returned by ``_get_page_images_for_docs``.
+
+    Returns:
+        A ``ToolResult`` with the image list and a formatted content string,
+        or ``None`` if *image_results* is empty.
+    """
+    if not image_results:
+        return None
+
+    from agno.tools.function import ToolResult
+
+    images = [img for img, _, _, _ in image_results]
+    source_info = ".\n ".join(
+        f"* 图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}"
+        f"(来源: {name}, 第{page}页{format_image_meta(meta)})"
+        for img, name, page, meta in image_results
+    )
+    return ToolResult(
+        content=(
+            "The following images are relevant document pages from the knowledge base. "
+            f"Read the content in these images to answer the user's question.\n [{source_info}]"
+        ),
+        images=images,
+    )
 
 
 def merge_user_metadata(

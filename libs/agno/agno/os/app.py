@@ -50,6 +50,7 @@ from agno.os.routers.metrics import get_metrics_router
 from agno.os.routers.registry import get_registry_router
 from agno.os.routers.schedules import get_schedule_router
 from agno.os.routers.session import get_session_router
+from agno.os.routers.storage import get_storage_router
 from agno.os.routers.teams import get_team_router
 from agno.os.routers.traces import get_traces_router
 from agno.os.routers.workflows import get_workflow_router
@@ -219,6 +220,8 @@ class AgentOS:
         scheduler_poll_interval: int = 15,
         scheduler_base_url: Optional[str] = None,
         internal_service_token: Optional[str] = None,
+        storages: Optional[List[Any]] = None,
+        storage_ids: Optional[List[str]] = None,
     ):
         """Initialize AgentOS.
 
@@ -252,6 +255,8 @@ class AgentOS:
             scheduler_poll_interval: Seconds between scheduler poll cycles (default: 15)
             scheduler_base_url: Base URL for scheduler HTTP calls (default: http://127.0.0.1:7777)
             internal_service_token: Token for scheduler-to-OS auth (auto-generated if not provided)
+            storages: Optional list of PageImageStorage instances for frontend direct upload
+            storage_ids: Optional list of identifiers for each storage instance
 
         """
         if not agents and not workflows and not teams and not knowledge and not db:
@@ -267,6 +272,8 @@ class AgentOS:
         self.settings: AgnoAPISettings = settings or AgnoAPISettings()
         self.auto_provision_dbs = auto_provision_dbs
         self._app_set = False
+        self.storages = storages
+        self.storage_ids = storage_ids
 
         if base_app:
             self.base_app: Optional[FastAPI] = base_app
@@ -420,6 +427,12 @@ class AgentOS:
             updated_routers.append(get_registry_router(registry=self.registry))
         else:
             updated_routers.append(_get_disabled_feature_router("/registry", "Registry", "registry"))
+
+        # Storage router (frontend direct upload)
+        if self.storages:
+            updated_routers.append(
+                get_storage_router(storages=self.storages, storage_ids=self.storage_ids, settings=self.settings)
+            )
 
         # Clear all previously existing routes
         app.router.routes = [
@@ -768,6 +781,12 @@ class AgentOS:
         else:
             log_debug("Registry router not enabled: requires a registry to be provided to AgentOS")
             routers.append(_get_disabled_feature_router("/registry", "Registry", "registry"))
+
+        # Storage router (frontend direct upload)
+        if self.storages:
+            routers.append(
+                get_storage_router(storages=self.storages, storage_ids=self.storage_ids, settings=self.settings)
+            )
 
         for router in routers:
             self._add_router(fastapi_app, router)

@@ -5,10 +5,10 @@ Requirements:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.storage.exceptions import OSSUploadError, OSSDeleteError
+from agno.knowledge.storage.exceptions import OSSDeleteError, OSSUploadError
 from agno.utils.log import log_debug
 
 
@@ -169,3 +169,30 @@ class AliyunOSSStorage(PageImageStorage):
             return key
         # Fallback: strip query params and return last path component
         return base_url.split("?")[0].rsplit("/", 1)[-1]
+
+    # ------------------------------------------------------------------
+    # Upload credentials (frontend direct upload)
+    # ------------------------------------------------------------------
+
+    def get_upload_credentials(
+        self,
+        prefix: Optional[str] = None,
+        expires: int = 3600,
+        content_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Generate a presigned PUT URL for frontend direct upload."""
+        object_key = self._generate_upload_object_key(prefix, **kwargs)
+        key = self._full_key(object_key)
+
+        bucket = self._get_bucket()
+        headers = {"Content-Type": content_type} if content_type else {}
+        upload_url = bucket.sign_url("PUT", key, expires, headers=headers)
+
+        return self._build_credential_response(
+            provider="aliyun_oss",
+            upload_url=upload_url,
+            object_key=key,
+            content_type=content_type,
+            expires_at=self._compute_expires_at(expires),
+        )

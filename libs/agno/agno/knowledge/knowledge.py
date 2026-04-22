@@ -24,7 +24,8 @@ from agno.knowledge.remote_content.remote_content import (
 )
 from agno.knowledge.remote_knowledge import RemoteKnowledge
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.utils import merge_user_metadata, set_agno_metadata, strip_agno_metadata
+from agno.knowledge.utils import merge_user_metadata, set_agno_metadata, strip_agno_metadata, \
+    build_page_image_tool_result
 from agno.utils.http import async_fetch_with_retry
 from agno.utils.log import log_debug, log_error, log_info, log_warning
 from agno.utils.string import generate_id
@@ -1625,7 +1626,15 @@ class Knowledge(RemoteKnowledge):
             import tempfile
 
             async with AsyncClient() as client:
-                response = await async_fetch_with_retry(content.url, client=client)
+                try:
+                    response = await async_fetch_with_retry(content.url, client=client)
+                except Exception as e:
+                    log_warning(f"Failed to fetch content from URL {content.url}: {e}")
+                    content.status = ContentStatus.FAILED
+                    content.status_message = f"Failed to fetch content from URL {content.url}: {e}"
+                    await self._aupdate_content(content)
+                    return
+
             # Write directly to temp file — reader and upload share it, avoiding redundant disk writes
             suffix = file_extension if file_extension else ".bin"
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
@@ -2628,7 +2637,7 @@ class Knowledge(RemoteKnowledge):
             if content.size is not None:
                 content_row.size = content.size
             if content.file_type is not None:
-                content_row.file_type = self._ensure_string_field(
+                content_row.type = self._ensure_string_field(
                     content.file_type, "content.file_type", default=""
                 )
             content_row.updated_at = int(time.time())
@@ -2681,7 +2690,7 @@ class Knowledge(RemoteKnowledge):
             if content.size is not None:
                 content_row.size = content.size
             if content.file_type is not None:
-                content_row.file_type = self._ensure_string_field(
+                content_row.type = self._ensure_string_field(
                     content.file_type, "content.file_type", default=""
                 )
 
@@ -3039,7 +3048,10 @@ class Knowledge(RemoteKnowledge):
     _SEARCH_KNOWLEDGE_INSTRUCTIONS = (
         "You have a knowledge base you can search using the search_knowledge_base tool. "
         "Search before answering questions—don't assume you know the answer. "
-        "For ambiguous questions, search first rather than asking for clarification."
+        "For ambiguous questions, search first rather than asking for clarification.\n\n"
+        "The search results may include images of document pages. When images are returned, "
+        "they contain the actual document content—read and analyze them carefully to answer the user's question. "
+        "Combine information from both text results and images to provide comprehensive answers."
     )
 
     _AGENTIC_FILTER_INSTRUCTION_TEMPLATE = """
@@ -3238,20 +3250,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                from agno.tools.function import ToolResult
-                from urllib.parse import urlparse
-
                 image_results = self._get_page_images_for_docs(docs)
-                if image_results:
-                    _images = [img for img, _, _ in image_results]
-                    _source_info = ", ".join(
-                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
-                        for img, name, page in image_results
-                    )
-                    return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
-                        images=_images,
-                    )
+                result = build_page_image_tool_result(image_results)
+                if result:
+                    return result
 
             return self._convert_documents_to_string(docs, agent)
 
@@ -3291,21 +3293,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                import asyncio
-                from agno.tools.function import ToolResult
-                from urllib.parse import urlparse
-
                 image_results = await asyncio.to_thread(self._get_page_images_for_docs, docs)
-                if image_results:
-                    _images = [img for img, _, _ in image_results]
-                    _source_info = ", ".join(
-                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
-                        for img, name, page in image_results
-                    )
-                    return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
-                        images=_images,
-                    )
+                result = build_page_image_tool_result(image_results)
+                if result:
+                    return result
 
             return self._convert_documents_to_string(docs, agent)
 
@@ -3395,20 +3386,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                from agno.tools.function import ToolResult
-                from urllib.parse import urlparse
-
                 image_results = self._get_page_images_for_docs(docs)
-                if image_results:
-                    _images = [img for img, _, _ in image_results]
-                    _source_info = ", ".join(
-                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
-                        for img, name, page in image_results
-                    )
-                    return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
-                        images=_images,
-                    )
+                result = build_page_image_tool_result(image_results)
+                if result:
+                    return result
 
             return self._convert_documents_to_string(docs, agent)
 
@@ -3470,21 +3451,10 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 return "No documents found"
 
             if self.use_page_images and docs:
-                import asyncio
-                from agno.tools.function import ToolResult
-                from urllib.parse import urlparse
-
                 image_results = await asyncio.to_thread(self._get_page_images_for_docs, docs)
-                if image_results:
-                    _images = [img for img, _, _ in image_results]
-                    _source_info = ", ".join(
-                        f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
-                        for img, name, page in image_results
-                    )
-                    return ToolResult(
-                        content=f"Found {len(docs)} relevant document sections across {len(_images)} pages. [{_source_info}]",
-                        images=_images,
-                    )
+                result = build_page_image_tool_result(image_results)
+                if result:
+                    return result
 
             return self._convert_documents_to_string(docs, agent)
 
@@ -4103,7 +4073,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             pass
         return accessible
 
-    def _get_page_images_for_docs(self, docs: List[Document]) -> List[Tuple[Any, str, int]]:
+    def _get_page_images_for_docs(self, docs: List[Document]) -> List[Tuple[Any, str, int, Dict[str, Any]]]:
         """Collect page images for retrieved documents.
 
         Pipeline:
@@ -4151,6 +4121,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url),
                     doc.name or "",
                     page_num,
+                    doc.meta_data,
                 ))
             return _docs
 
@@ -4259,6 +4230,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 Image(url=r) if r.startswith("http") else Image(filepath=r),
                 doc_meta_by_id[d][1].name or "",
                 p,
+                doc_meta_by_id[d][1].meta_data,
             )
             for d, p, r in image_refs
         ]

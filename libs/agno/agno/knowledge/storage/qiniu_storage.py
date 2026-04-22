@@ -6,10 +6,10 @@ Requirements:
 
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.storage.exceptions import OSSUploadError, OSSDeleteError
+from agno.knowledge.storage.exceptions import OSSDeleteError, OSSUploadError
 from agno.utils.log import log_debug
 
 
@@ -196,3 +196,41 @@ class QiniuStorage(PageImageStorage):
         if key is not None:
             return key
         return base_url.split("?")[0].rsplit("/", 1)[-1]
+
+    # ------------------------------------------------------------------
+    # Upload credentials (frontend direct upload)
+    # ------------------------------------------------------------------
+
+    def get_upload_credentials(
+        self,
+        prefix: Optional[str] = None,
+        expires: int = 3600,
+        content_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Generate an upload token for frontend direct upload."""
+        object_key = self._generate_upload_object_key(prefix, **kwargs)
+        key = self._full_key(object_key)
+
+        auth = self._get_auth()
+        policy: Dict[str, Any] = {}
+        if prefix:
+            policy["prefix"] = self._full_key(prefix) if self.key_prefix else prefix
+
+        token = auth.upload_token(
+            self.bucket_name,
+            key,
+            expires,
+            policy=policy if policy else None,
+        )
+
+        upload_url = kwargs.get("upload_url", "https://up.qiniup.com")
+
+        return self._build_credential_response(
+            provider="qiniu",
+            upload_url=upload_url,
+            object_key=key,
+            content_type=None,
+            expires_at=self._compute_expires_at(expires),
+            extra={"token": token},
+        )

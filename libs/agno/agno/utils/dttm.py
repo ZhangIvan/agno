@@ -1,5 +1,22 @@
 from datetime import datetime, timezone
-from typing import Union
+from typing import Optional, Union
+
+_CHINESE_WEEKDAYS = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+
+def format_datetime_with_weekday(dt: datetime, datetime_format: Optional[str] = None) -> str:
+    """Format a datetime with Chinese day of week appended.
+
+    Args:
+        dt: The datetime to format.
+        datetime_format: Optional strftime format string. If None, uses str(dt).
+
+    Returns:
+        Formatted datetime string with Chinese weekday appended, e.g. "2026-04-19 14:30:00, 星期六".
+    """
+    base = dt.strftime(datetime_format) if datetime_format else str(dt)
+    weekday = _CHINESE_WEEKDAYS[dt.weekday()]
+    return f"{base}, {weekday}"
 
 
 def current_datetime() -> datetime:

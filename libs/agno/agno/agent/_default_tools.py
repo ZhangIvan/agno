@@ -13,7 +13,6 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from agno.agent.agent import Agent
@@ -22,6 +21,7 @@ from agno.culture.manager import CultureManager
 from agno.db.base import BaseDb, SessionType
 from agno.filters import FilterExpr
 from agno.knowledge.types import KnowledgeFilter
+from agno.knowledge.utils import build_page_image_tool_result
 from agno.memory import MemoryManager
 from agno.models.message import Message, MessageReferences
 from agno.run import RunContext
@@ -226,11 +226,14 @@ def create_knowledge_search_tool(
         def search_knowledge_base(query: str) -> str:
             """Use this function to search the knowledge base for information about a query.
 
+            The results may include text content and/or images of document pages.
+            When images are returned, read them to extract the relevant information.
+
             Args:
                 query: The query to search for.
 
             Returns:
-                str: A string containing the response from the knowledge base.
+                str: A string containing the response from the knowledge base, may include images.
             """
             retrieval_timer = Timer()
             retrieval_timer.start()
@@ -253,16 +256,9 @@ def create_knowledge_search_tool(
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
-                            from agno.tools.function import ToolResult
-                            _images = [img for img, _, _ in images]
-                            _source_info = ", ".join(
-                                f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
-                                for img, name, page in images
-                            )
-                            return ToolResult(
-                                content=f"Found {len(images)} relevant document sections across {len(_images)} pages. [{_source_info}]",
-                                images=_images,
-                            )
+                            result = build_page_image_tool_result(images)
+                            if result:
+                                return result
                     return _format_results(ref_dicts if raw_docs else None)
 
                 docs = _messages.get_relevant_docs_from_knowledge(
@@ -282,11 +278,14 @@ def create_knowledge_search_tool(
         async def asearch_knowledge_base(query: str) -> str:
             """Use this function to search the knowledge base for information about a query.
 
+            The results may include text content and/or images of document pages.
+            When images are returned, read them to extract the relevant information.
+
             Args:
                 query: The query to search for.
 
             Returns:
-                str: A string containing the response from the knowledge base.
+                str: A string containing the response from the knowledge base, may include images.
             """
             retrieval_timer = Timer()
             retrieval_timer.start()
@@ -308,16 +307,9 @@ def create_knowledge_search_tool(
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
-                            from agno.tools.function import ToolResult
-                            _images = [img for img, _, _ in images]
-                            _source_info = ", ".join(
-                                f"图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
-                                for img, name, page in images
-                            )
-                            return ToolResult(
-                                content=f"Found {len(images)} relevant document sections across {len(_images)} pages. [{_source_info}]",
-                                images=_images,
-                            )
+                            result = build_page_image_tool_result(images)
+                            if result:
+                                return result
                     return _format_results(ref_dicts if raw_docs else None)
 
                 docs = await _messages.aget_relevant_docs_from_knowledge(

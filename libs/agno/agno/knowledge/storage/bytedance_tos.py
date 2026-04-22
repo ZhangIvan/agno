@@ -5,10 +5,10 @@ Requirements:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.storage.exceptions import OSSUploadError, OSSDeleteError
+from agno.knowledge.storage.exceptions import OSSDeleteError, OSSUploadError
 from agno.utils.log import log_debug
 
 
@@ -191,3 +191,38 @@ class ByteDanceTOSStorage(PageImageStorage):
         if key is not None:
             return key
         return base_url.split("?")[0].split("/", 3)[-1]
+
+    # ------------------------------------------------------------------
+    # Upload credentials (frontend direct upload)
+    # ------------------------------------------------------------------
+
+    def get_upload_credentials(
+        self,
+        prefix: Optional[str] = None,
+        expires: int = 3600,
+        content_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Generate a presigned PUT URL for frontend direct upload."""
+        from tos.enum import HttpMethodType
+
+        object_key = self._generate_upload_object_key(prefix, **kwargs)
+        key = self._full_key(object_key)
+
+        client = self._get_client()
+        header: Optional[Dict[str, str]] = {"Content-Type": content_type} if content_type else None
+        result = client.pre_signed_url(
+            http_method=HttpMethodType.Http_Method_Put,
+            bucket=self.bucket_name,
+            key=key,
+            expires=expires,
+            header=header,
+        )
+
+        return self._build_credential_response(
+            provider="bytedance_tos",
+            upload_url=result.signed_url,
+            object_key=key,
+            content_type=content_type,
+            expires_at=self._compute_expires_at(expires),
+        )

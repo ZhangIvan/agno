@@ -5,10 +5,10 @@ Requirements:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.storage.exceptions import OSSUploadError, OSSDeleteError
+from agno.knowledge.storage.exceptions import OSSDeleteError, OSSUploadError
 from agno.utils.log import log_debug
 
 
@@ -177,3 +177,37 @@ class TencentCOSStorage(PageImageStorage):
                 return url[len(prefix):].split("?")[0]
 
         return None
+
+    # ------------------------------------------------------------------
+    # Upload credentials (frontend direct upload)
+    # ------------------------------------------------------------------
+
+    def get_upload_credentials(
+        self,
+        prefix: Optional[str] = None,
+        expires: int = 3600,
+        content_type: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Generate a presigned PUT URL for frontend direct upload."""
+        object_key = self._generate_upload_object_key(prefix, **kwargs)
+
+        client = self._get_client()
+        cos_kwargs: Dict[str, Any] = {}
+        if content_type:
+            cos_kwargs["ContentType"] = content_type
+        upload_url = client.get_presigned_url(
+            Method="PUT",
+            Bucket=self.bucket_name,
+            Key=object_key,
+            Expired=expires,
+            **cos_kwargs,
+        )
+
+        return self._build_credential_response(
+            provider="tencent_cos",
+            upload_url=upload_url,
+            object_key=object_key,
+            content_type=content_type,
+            expires_at=self._compute_expires_at(expires),
+        )
