@@ -42,9 +42,9 @@ def build_page_image_tool_result(
     from agno.tools.function import ToolResult
 
     images = [img for img, _, _, _ in image_results]
-    source_info = ".\n ".join(
+    source_info = ". ".join(
         f"* 图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}"
-        f"(来源: {name}, 第{page}页{format_image_meta(meta)})"
+        f"(来源: {name}, 第{page}页)"
         for img, name, page, meta in image_results
     )
     return ToolResult(
