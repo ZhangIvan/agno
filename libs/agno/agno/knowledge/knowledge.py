@@ -4240,7 +4240,11 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         docs: List[Document],
         agent: Optional[Any] = None,
     ) -> str:
-        """Convert documents to a string representation.
+        """Convert documents to a string representation for the LLM.
+
+        Strips heavy metadata (signed URLs, chunk_size, similarity_score, etc.)
+        before sending to the LLM. Full metadata is preserved in run_response.references
+        for the frontend (RunCompleted event).
 
         Args:
             docs: List of documents to convert.
@@ -4249,19 +4253,22 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         Returns:
             String representation of documents.
         """
-        # If agent (Agent or Team) has a custom converter, use it for proper YAML/JSON formatting
-        if agent is not None and hasattr(agent, "_convert_documents_to_string"):
-            return agent._convert_documents_to_string([doc.to_dict() for doc in docs])
+        use_lean = getattr(agent, "lean_references", True)
 
-        # Default conversion
+        if use_lean:
+            output_docs = [{"content": doc.content, **({"name": doc.name} if doc.name else {})} for doc in docs]
+        else:
+            output_docs = [doc.to_dict() for doc in docs]
+
+        # If agent (Agent or Team) has a custom converter, use it
+        if agent is not None and hasattr(agent, "_convert_documents_to_string"):
+            return agent._convert_documents_to_string(output_docs)
+
+        # Default conversion: join content directly from original docs
         if not docs:
             return "No documents found"
 
-        result_parts = []
-        for doc in docs:
-            if doc.content:
-                result_parts.append(doc.content)
-
+        result_parts = [doc.content for doc in docs if doc.content]
         return "\n\n---\n\n".join(result_parts) if result_parts else "No content found"
 
     def retrieve(

@@ -22,6 +22,7 @@ from agno.db.base import BaseDb, SessionType
 from agno.filters import FilterExpr
 from agno.knowledge.types import KnowledgeFilter
 from agno.knowledge.utils import build_page_image_tool_result
+from agno.agent._utils import _strip_doc_metadata
 from agno.memory import MemoryManager
 from agno.models.message import Message, MessageReferences
 from agno.run import RunContext
@@ -120,14 +121,16 @@ def create_knowledge_search_tool(
     def _format_results(docs: Optional[List[Union[Dict[str, Any], str]]]) -> str:
         if not docs:
             return "No documents found"
+        lean = getattr(agent, "lean_references", True)
+        output_docs = _strip_doc_metadata(docs) if lean else docs
         if agent.references_format == "json":
             import json
 
-            return json.dumps(docs, indent=2, default=str, ensure_ascii=False)
+            return json.dumps(output_docs, ensure_ascii=False)
         else:
             import yaml
 
-            return yaml.dump(docs, default_flow_style=False)
+            return yaml.dump(output_docs, default_flow_style=False)
 
     def _track_references(docs: Optional[List[Union[Dict[str, Any], str]]], query: str, elapsed: float) -> None:
         if run_response is not None and docs:

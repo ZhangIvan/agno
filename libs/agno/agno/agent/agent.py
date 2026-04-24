@@ -149,6 +149,10 @@ class Agent:
     #     ...
     knowledge_retriever: Optional[Callable[..., Optional[List[Union[Dict, str]]]]] = None
     references_format: Literal["json", "yaml"] = "json"
+    # When True, strip heavy metadata (signed URLs, chunk_size, similarity_score, etc.)
+    # from knowledge references before sending to the LLM.
+    # Full metadata is always preserved in run_response.references for the frontend.
+    lean_references: bool = True
 
     # --- Skills ---
     # Skills provide structured instructions, reference docs, and scripts for agents
@@ -413,6 +417,7 @@ class Agent:
         add_knowledge_to_context: bool = False,
         knowledge_retriever: Optional[Callable[..., Optional[List[Union[Dict, str]]]]] = None,
         references_format: Literal["json", "yaml"] = "json",
+        lean_references: bool = True,
         skills: Optional[Skills] = None,
         metadata: Optional[Dict[str, Any]] = None,
         tools: Optional[Union[Sequence[Union[Toolkit, Callable, Function, Dict]], Callable[..., List]]] = None,
@@ -559,6 +564,7 @@ class Agent:
         self.add_knowledge_to_context = add_knowledge_to_context
         self.knowledge_retriever = knowledge_retriever
         self.references_format = references_format
+        self.lean_references = lean_references
 
         self.skills = skills
 

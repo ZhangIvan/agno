@@ -57,16 +57,33 @@ def get_effective_filters(
     return effective_filters
 
 
+def _strip_doc_metadata(docs: List[Union[Dict[str, Any], str]]) -> List[Dict[str, Any]]:
+    """Strip heavy metadata from documents, keeping only content and name for LLM consumption."""
+    lean_docs = []
+    for doc in docs:
+        if isinstance(doc, dict):
+            lean_doc = {"content": doc.get("content", "")}
+            if doc.get("name"):
+                lean_doc["name"] = doc["name"]
+            lean_docs.append(lean_doc)
+        else:
+            lean_docs.append({"content": str(doc)})
+    return lean_docs
+
+
 def convert_documents_to_string(agent: Agent, docs: List[Union[Dict[str, Any], str]]) -> str:
     if docs is None or len(docs) == 0:
         return ""
 
+    lean = getattr(agent, "lean_references", True)
+    output_docs = _strip_doc_metadata(docs) if lean else docs
+
     if agent.references_format == "yaml":
         import yaml
 
-        return yaml.dump(docs)
+        return yaml.dump(output_docs)
 
-    return json.dumps(docs, indent=2, ensure_ascii=False)
+    return json.dumps(output_docs, ensure_ascii=False)
 
 
 def convert_dependencies_to_string(agent: Agent, context: Dict[str, Any]) -> str:
