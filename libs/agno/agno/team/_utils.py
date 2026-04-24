@@ -17,6 +17,7 @@ from typing import (
 if TYPE_CHECKING:
     from agno.team.team import Team
 
+from agno.agent._utils import _strip_doc_metadata
 from agno.filters import FilterExpr
 from agno.utils.log import log_debug, log_error, log_warning
 
@@ -59,12 +60,15 @@ def _convert_documents_to_string(team: Team, docs: List[Union[Dict[str, Any], st
     if docs is None or len(docs) == 0:
         return ""
 
+    lean = getattr(team, "lean_references", True)
+    output_docs = _strip_doc_metadata(docs) if lean else docs
+
     if team.references_format == "yaml":
         import yaml
 
-        return yaml.dump(docs)
+        return yaml.dump(output_docs)
 
-    return json.dumps(docs, indent=2)
+    return json.dumps(output_docs, ensure_ascii=False)
 
 
 def _convert_dependencies_to_string(team: Team, context: Dict[str, Any]) -> str:

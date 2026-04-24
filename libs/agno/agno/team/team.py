@@ -216,6 +216,10 @@ class Team:
     #     ...
     knowledge_retriever: Optional[Callable[..., Optional[List[Union[Dict, str]]]]] = None
     references_format: Literal["json", "yaml"] = "json"
+    # When True, strip heavy metadata (signed URLs, chunk_size, similarity_score, etc.)
+    # from knowledge references before sending to the LLM.
+    # Full metadata is always preserved in run_response.references for the frontend.
+    lean_references: bool = True
 
     # --- Tools ---
     # If True, add a tool to get information about the team members
@@ -469,6 +473,7 @@ class Team:
         update_knowledge: bool = False,
         knowledge_retriever: Optional[Callable[..., Optional[List[Union[Dict, str]]]]] = None,
         references_format: Literal["json", "yaml"] = "json",
+        lean_references: bool = True,
         share_member_interactions: bool = False,
         get_member_information_tool: bool = False,
         search_knowledge: bool = True,
@@ -588,6 +593,7 @@ class Team:
             update_knowledge=update_knowledge,
             knowledge_retriever=knowledge_retriever,
             references_format=references_format,
+            lean_references=lean_references,
             share_member_interactions=share_member_interactions,
             get_member_information_tool=get_member_information_tool,
             search_knowledge=search_knowledge,
