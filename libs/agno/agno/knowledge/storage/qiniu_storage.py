@@ -184,10 +184,10 @@ class QiniuStorage(PageImageStorage):
         for proto in ["https://", "http://"]:
             prefix = f"{proto}{self._strip_protocol(domain)}/"
             if url.startswith(prefix):
-                return url[len(prefix):].split("?")[0]
+                return url[len(prefix) :].split("?")[0]
         # Also try with the domain as-is
         if url.startswith(domain + "/"):
-            return url[len(domain) + 1:].split("?")[0]
+            return url[len(domain) + 1 :].split("?")[0]
         return None
 
     def _key_from_url(self, base_url: str) -> str:

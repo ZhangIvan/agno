@@ -14,7 +14,10 @@ from agno.utils.log import log_debug, log_error, log_warning
 class TextReader(Reader):
     """Reader for Text files"""
 
-    def __init__(self, chunking_strategy: Optional[ChunkingStrategy] = FixedSizeChunking(), **kwargs):
+    def __init__(self, chunking_strategy: Optional[ChunkingStrategy] = None, **kwargs):
+        if chunking_strategy is None:
+            chunk_size = kwargs.get("chunk_size", 5000)
+            chunking_strategy = FixedSizeChunking(chunk_size=chunk_size)
         super().__init__(chunking_strategy=chunking_strategy, **kwargs)
 
     @classmethod
@@ -47,13 +50,17 @@ class TextReader(Reader):
                 file.seek(0)
                 file_contents = file.read().decode(self.encoding or "utf-8")
 
-            documents = [
-                Document(
-                    name=file_name,
-                    id=str(uuid.uuid4()),
-                    content=file_contents,
-                )
-            ] if file_contents else []
+            documents = (
+                [
+                    Document(
+                        name=file_name,
+                        id=str(uuid.uuid4()),
+                        content=file_contents,
+                    )
+                ]
+                if file_contents
+                else []
+            )
             if self.chunk:
                 chunked_documents = []
                 for document in documents:
@@ -78,8 +85,8 @@ class TextReader(Reader):
 
                     async with aiofiles.open(file, "r", encoding=self.encoding or "utf-8") as f:
                         file_contents = await f.read()
-                except ImportError:
-                    log_warning("aiofiles not installed, using synchronous file I/O")
+                except ImportError as e:
+                    log_warning(f"aiofiles not installed, using synchronous file I/O: {str(e)}")
                     file_contents = file.read_text(encoding=self.encoding or "utf-8")
             else:
                 log_debug(f"Reading uploaded file asynchronously: {getattr(file, 'name', 'BytesIO')}")
@@ -87,11 +94,15 @@ class TextReader(Reader):
                 file.seek(0)
                 file_contents = file.read().decode(self.encoding or "utf-8")
 
-            document = Document(
-                name=file_name,
-                id=str(uuid.uuid4()),
-                content=file_contents,
-            ) if file_contents else None
+            document = (
+                Document(
+                    name=file_name,
+                    id=str(uuid.uuid4()),
+                    content=file_contents,
+                )
+                if file_contents
+                else None
+            )
 
             if self.chunk and document:
                 return await self._async_chunk_document(document)

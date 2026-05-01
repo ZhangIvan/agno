@@ -262,7 +262,7 @@ class MCPTools(Toolkit):
                     # Function takes no parameters
                     return header_provider()
         except Exception as e:
-            log_warning(f"Error calling header_provider: {e}")
+            log_warning(f"Error calling header_provider: {str(e)}")
             return {}
 
     async def _cleanup_stale_sessions(self) -> None:
@@ -346,7 +346,7 @@ class MCPTools(Toolkit):
                     sse_params["url"] = self.url
 
                 # Merge dynamic headers into existing headers
-                existing_headers = sse_params.get("headers", {})
+                existing_headers = sse_params.get("headers") or {}
                 sse_params["headers"] = {**existing_headers, **dynamic_headers}
 
                 context = sse_client(**sse_params)  # type: ignore
@@ -358,7 +358,7 @@ class MCPTools(Toolkit):
                     streamable_http_params["url"] = self.url
 
                 # Merge dynamic headers into existing headers
-                existing_headers = streamable_http_params.get("headers", {})
+                existing_headers = streamable_http_params.get("headers") or {}
                 streamable_http_params["headers"] = {**existing_headers, **dynamic_headers}
 
                 context = streamablehttp_client(**streamable_http_params)  # type: ignore
@@ -519,11 +519,21 @@ class MCPTools(Toolkit):
             await self.initialize()
             return
 
+        # If header_provider is set, generate initial headers for the connection.
+        # This ensures MCP servers that require auth headers for tool discovery
+        # receive them during initialization, not just during per-run sessions.
+        init_headers: dict[str, Any] = {}
+        if self.header_provider:
+            init_headers = self._call_header_provider()
+
         # Create a new studio session
         if self.transport == "sse":
             sse_params = asdict(self.server_params) if self.server_params is not None else {}  # type: ignore
             if "url" not in sse_params:
                 sse_params["url"] = self.url
+            if init_headers:
+                existing_headers = sse_params.get("headers") or {}
+                sse_params["headers"] = {**existing_headers, **init_headers}
             self._context = sse_client(**sse_params)  # type: ignore
             client_timeout = min(self.timeout_seconds, sse_params.get("timeout", self.timeout_seconds))
 
@@ -532,6 +542,9 @@ class MCPTools(Toolkit):
             streamable_http_params = asdict(self.server_params) if self.server_params is not None else {}  # type: ignore
             if "url" not in streamable_http_params:
                 streamable_http_params["url"] = self.url
+            if init_headers:
+                existing_headers = streamable_http_params.get("headers") or {}
+                streamable_http_params["headers"] = {**existing_headers, **init_headers}
             self._context = streamablehttp_client(**streamable_http_params)  # type: ignore
             params_timeout = streamable_http_params.get("timeout", self.timeout_seconds)
             if isinstance(params_timeout, timedelta):
@@ -555,6 +568,7 @@ class MCPTools(Toolkit):
                 except Exception:
                     pass
                 self._context = None
+            raise
 
         self._active_contexts.append(self._context)
         read, write = session_params[0:2]
@@ -704,10 +718,10 @@ class MCPTools(Toolkit):
                     self.functions[f.name] = f
                     log_debug(f"Function: {f.name} registered with {self.name}")
                 except Exception as e:
-                    log_error(f"Failed to register tool {tool.name}: {e}")
+                    log_error(f"Failed to register tool {tool.name}: {str(e)}")
 
-        except (RuntimeError, BaseException) as e:
-            log_error(f"Failed to get tools for {str(self)}: {e}")
+        except (RuntimeError, BaseException):
+            log_error(f"Failed to get tools for {str(self)}")
             raise
 
     async def initialize(self) -> None:
@@ -726,5 +740,5 @@ class MCPTools(Toolkit):
 
             self._initialized = True
 
-        except (RuntimeError, BaseException) as e:
-            log_error(f"Failed to initialize MCP toolkit: {e}")
+        except (RuntimeError, BaseException):
+            log_error("Failed to initialize MCP toolkit")

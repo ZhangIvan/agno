@@ -24,8 +24,13 @@ from agno.knowledge.remote_content.remote_content import (
 )
 from agno.knowledge.remote_knowledge import RemoteKnowledge
 from agno.knowledge.storage.base import PageImageStorage
-from agno.knowledge.utils import merge_user_metadata, set_agno_metadata, strip_agno_metadata, \
-    build_page_image_tool_result
+from agno.knowledge.types import ContentType
+from agno.knowledge.utils import (
+    build_page_image_tool_result,
+    merge_user_metadata,
+    set_agno_metadata,
+    strip_agno_metadata,
+)
 from agno.utils.http import async_fetch_with_retry
 from agno.utils.log import log_debug, log_error, log_info, log_warning
 from agno.utils.string import generate_id
@@ -90,12 +95,15 @@ class Knowledge(RemoteKnowledge):
     # Timeout in seconds for the HEAD request when verify_image_urls is True.
     verify_image_url_timeout: float = 1.0
 
-
     def __post_init__(self):
+        import asyncio
+
         from agno.vectordb import VectorDb
 
         self.vector_db = cast(VectorDb, self.vector_db)
-        if self.vector_db and not getattr(self.vector_db, 'page_image_storage', None) and self.page_image_storage:
+        self._upload_semaphore = asyncio.Semaphore(self.upload_concurrency)
+        self._sign_semaphore = asyncio.Semaphore(self.upload_concurrency)
+        if self.vector_db and not getattr(self.vector_db, "page_image_storage", None) and self.page_image_storage:
             for attr in ("page_image_storage", "upload_concurrency", "url_signature_expires"):
                 setattr(self.vector_db, attr, getattr(self, attr))
 
@@ -989,7 +997,7 @@ class Knowledge(RemoteKnowledge):
                     return None
 
             except Exception as e:
-                log_warning(f"Cannot create {reader_type} reader {e}")
+                log_warning(f"Cannot create {reader_type} reader: {str(e)}")
                 return None
 
         return self.readers.get(reader_type)
@@ -1262,7 +1270,9 @@ class Knowledge(RemoteKnowledge):
             return self.markdown_reader
         elif uri_lower.endswith(".xlsx") or uri_lower.endswith(".xls"):
             return self.excel_reader
-        elif any(uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]):
+        elif any(
+            uri_lower.endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif"]
+        ):
             return self.image_reader
         else:
             return self.text_reader
@@ -1432,7 +1442,7 @@ class Knowledge(RemoteKnowledge):
                     try:
                         content.size = path.stat().st_size
                     except (OSError, IOError) as e:
-                        log_warning(f"Could not get file size for {path}: {e}")
+                        log_warning(f"Could not get file size for {path}: {str(e)}")
                         content.size = 0
 
                 if not content.id:
@@ -1519,7 +1529,7 @@ class Knowledge(RemoteKnowledge):
                     try:
                         content.size = path.stat().st_size
                     except (OSError, IOError) as e:
-                        log_warning(f"Could not get file size for {path}: {e}")
+                        log_warning(f"Could not get file size for {path}: {str(e)}")
                         content.size = 0
 
                 if not content.id:
@@ -1612,7 +1622,7 @@ class Knowledge(RemoteKnowledge):
             content.status = ContentStatus.FAILED
             content.status_message = f"Invalid URL: {content.url} - {str(e)}"
             await self._aupdate_content(content)
-            log_warning(f"Invalid URL: {content.url} - {str(e)}")
+            log_warning(f"Invalid URL: {content.url}: {str(e)}")
         # 3. Fetch and load content if file has an extension
         from urllib.parse import unquote as _unquote
 
@@ -1621,7 +1631,14 @@ class Knowledge(RemoteKnowledge):
 
         file_source: Optional[Union[Path, BytesIO]] = None
         _tmp_file_path: Optional[str] = None
-        if file_extension:
+        # Skip pre-download when a custom URL-based reader is provided —
+        # it handles the URL directly (e.g. LLMsTxtReader fetches linked pages)
+        skip_download = (
+            content.reader is not None
+            and hasattr(content.reader, "get_supported_content_types")
+            and ContentType.URL in content.reader.get_supported_content_types()
+        )
+        if file_extension and not skip_download:
             import os
             import tempfile
 
@@ -1809,7 +1826,7 @@ class Knowledge(RemoteKnowledge):
             content.status = ContentStatus.FAILED
             content.status_message = f"Invalid URL: {content.url} - {str(e)}"
             self._update_content(content)
-            log_warning(f"Invalid URL: {content.url} - {str(e)}")
+            log_warning(f"Invalid URL: {content.url}: {str(e)}")
 
         # 3. Fetch and load content if file has an extension
         from urllib.parse import unquote as _unquote
@@ -1819,7 +1836,14 @@ class Knowledge(RemoteKnowledge):
 
         file_source: Optional[Union[Path, BytesIO]] = None
         _tmp_file_path: Optional[str] = None
-        if file_extension:
+        # Skip pre-download when a custom URL-based reader is provided —
+        # it handles the URL directly (e.g. LLMsTxtReader fetches linked pages)
+        skip_download = (
+            content.reader is not None
+            and hasattr(content.reader, "get_supported_content_types")
+            and ContentType.URL in content.reader.get_supported_content_types()
+        )
+        if file_extension and not skip_download:
             import os
             import tempfile
 
@@ -2279,6 +2303,60 @@ class Knowledge(RemoteKnowledge):
     # PRIVATE - CONVERSION & DATA METHODS
     # ==========================================
 
+    @staticmethod
+    def _build_remote_content_identity(remote_content: Optional["RemoteContent"]) -> Optional[str]:
+        """Return a stable identity string for a remote content reference.
+
+        The reference's source scope (bucket, repo, site, container) plus its
+        in-scope path must be included in the content hash so that the same
+        filename pulled from two different sources does not collide.
+        """
+        if remote_content is None:
+            return None
+
+        from agno.knowledge.remote_content.remote_content import (
+            AzureBlobContent,
+            GCSContent,
+            GitHubContent,
+            S3Content,
+            SharePointContent,
+        )
+
+        if isinstance(remote_content, GitHubContent):
+            scope = remote_content.repo or ""
+            in_scope = remote_content.file_path or remote_content.folder_path or ""
+            branch = remote_content.branch or ""
+            return f"github:{scope}@{branch}:{in_scope}"
+
+        elif isinstance(remote_content, S3Content):
+            scope = remote_content.bucket_name or (
+                remote_content.bucket.name if remote_content.bucket is not None else ""
+            )
+            in_scope = (
+                remote_content.key
+                or remote_content.prefix
+                or (remote_content.object.name if remote_content.object is not None else "")
+            )
+            return f"s3:{scope}:{in_scope}"
+
+        elif isinstance(remote_content, GCSContent):
+            scope = remote_content.bucket_name or (
+                remote_content.bucket.name if remote_content.bucket is not None else ""
+            )
+            in_scope = remote_content.blob_name or remote_content.prefix or ""
+            return f"gcs:{scope}:{in_scope}"
+
+        elif isinstance(remote_content, SharePointContent):
+            scope = f"{remote_content.site_path or ''}/{remote_content.drive_id or ''}"
+            in_scope = remote_content.file_path or remote_content.folder_path or ""
+            return f"sharepoint:{remote_content.config_id}:{scope}:{in_scope}"
+
+        elif isinstance(remote_content, AzureBlobContent):
+            in_scope = remote_content.blob_name or remote_content.prefix or ""
+            return f"azureblob:{remote_content.config_id}:{in_scope}"
+
+        return None
+
     def _build_content_hash(self, content: Content) -> str:
         """
         Build the content hash from the content.
@@ -2299,6 +2377,10 @@ class Knowledge(RemoteKnowledge):
             hash_parts.append(content.name)
         if content.description:
             hash_parts.append(content.description)
+
+        remote_identity = self._build_remote_content_identity(content.remote_content)
+        if remote_identity:
+            hash_parts.append(remote_identity)
 
         if content.path:
             hash_parts.append(str(content.path))
@@ -2414,7 +2496,7 @@ class Knowledge(RemoteKnowledge):
             try:
                 return str(value)
             except Exception as e:
-                log_warning(f"Failed to convert {field_name} to string: {e}, using default")
+                log_warning(f"Failed to convert {field_name} to string, using default: {str(e)}")
                 return default
 
         # Already a string, return as-is
@@ -2637,9 +2719,7 @@ class Knowledge(RemoteKnowledge):
             if content.size is not None:
                 content_row.size = content.size
             if content.file_type is not None:
-                content_row.type = self._ensure_string_field(
-                    content.file_type, "content.file_type", default=""
-                )
+                content_row.type = self._ensure_string_field(content.file_type, "content.file_type", default="")
             content_row.updated_at = int(time.time())
             self.contents_db.upsert_knowledge_content(knowledge_row=content_row)
 
@@ -2690,9 +2770,7 @@ class Knowledge(RemoteKnowledge):
             if content.size is not None:
                 content_row.size = content.size
             if content.file_type is not None:
-                content_row.type = self._ensure_string_field(
-                    content.file_type, "content.file_type", default=""
-                )
+                content_row.type = self._ensure_string_field(content.file_type, "content.file_type", default="")
 
             content_row.updated_at = int(time.time())
             if isinstance(self.contents_db, AsyncBaseDb):
@@ -3230,7 +3308,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 docs = self.search(query=query, filters=knowledge_filters)
             except Exception as e:
                 retrieval_timer.stop()
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
 
             if run_response is not None and docs:
@@ -3273,7 +3351,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 docs = await self.asearch(query=query, filters=knowledge_filters)
             except Exception as e:
                 retrieval_timer.stop()
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
 
             if run_response is not None and docs:
@@ -3366,7 +3444,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 docs = self.search(query=query, filters=search_filters)
             except Exception as e:
                 retrieval_timer.stop()
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
 
             if run_response is not None and docs:
@@ -3431,13 +3509,18 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 docs = await self.asearch(query=query, filters=search_filters)
             except Exception as e:
                 retrieval_timer.stop()
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
 
             if run_response is not None and docs:
+
+                async def _ref_doc(doc: Document) -> Dict[str, Any]:
+                    async with self._sign_semaphore:
+                        return await self._async_doc_to_reference_dict(doc)
+
                 references = MessageReferences(
                     query=query,
-                    references=[await self._async_doc_to_reference_dict(doc) for doc in docs],
+                    references=list(await asyncio.gather(*[_ref_doc(doc) for doc in docs])),
                     time=round(retrieval_timer.elapsed, 4),
                 )
                 if run_response.references is None:
@@ -3572,13 +3655,12 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         if not upload_items:
             return docs, []
 
-        semaphore = asyncio.Semaphore(self.upload_concurrency)
         storage = self.page_image_storage
 
         async def _upload_one(
             doc: Document, local_path: str, page_num: int, is_cache_file: bool, object_key: str
         ) -> Optional[Tuple[Document, int, str, Optional[str]]]:
-            async with semaphore:
+            async with self._upload_semaphore:
                 try:
                     url = await storage.async_upload(local_path, object_key)
                     return (doc, page_num, url, local_path if is_cache_file else None)
@@ -3587,9 +3669,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     return None
 
         # Phase 1: concurrent uploads
-        results = await asyncio.gather(
-            *[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items]
-        )
+        results = await asyncio.gather(*[_upload_one(doc, lp, pn, ic, ok) for doc, lp, pn, ic, ok in upload_items])
 
         page_url_map: Dict[int, str] = {}
         local_paths: List[str] = []
@@ -3699,7 +3779,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                 url = meta.get(url_field)
                 if url:
                     try:
-                        meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
+                        meta[url_field] = await self.page_image_storage.async_sign_url(
+                            url, expires=self.url_signature_expires
+                        )
                     except Exception as e:
                         log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
 
@@ -3735,8 +3817,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         """Async version of ``_sign_reference_urls``."""
         if not self.page_image_storage:
             return references
-        signed: List[Dict[str, Any]] = []
-        for ref in references:
+
+        async def _sign_one(ref: Dict[str, Any]) -> Dict[str, Any]:
             ref = dict(ref)
             meta = ref.get("meta_data")
             if isinstance(meta, dict):
@@ -3746,11 +3828,15 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     url = meta.get(url_field)
                     if url:
                         try:
-                            meta[url_field] = await self.page_image_storage.async_sign_url(url, expires=self.url_signature_expires)
+                            async with self._sign_semaphore:
+                                meta[url_field] = await self.page_image_storage.async_sign_url(
+                                    url, expires=self.url_signature_expires
+                                )
                         except Exception as e:
                             log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
-            signed.append(ref)
-        return signed
+            return ref
+
+        return list(await asyncio.gather(*[_sign_one(ref) for ref in references]))
 
     @staticmethod
     def _strip_url_signature(url: str) -> str:
@@ -3765,14 +3851,14 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
     @staticmethod
     def _strip_reference_url_signatures(
-        references: List["MessageReferences"],
-    ) -> List["MessageReferences"]:
+        references: List[Any],
+    ) -> List[Any]:
         """Return a copy of *references* with OSS URL signatures stripped.
 
         Each ``page_image_url`` and ``file_url`` in ``meta_data`` is reduced to
         its base URL (query string removed).  The original objects are not mutated.
         """
-        from agno.models.message import MessageReferences as MR
+        from agno.models.message import MessageReferences as MR  # noqa: F811
 
         stripped: List[MR] = []
         for ref_group in references:
@@ -3904,7 +3990,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             log_error(f"Failed to upload original file {filename}: {e}", exc_info=True)
         return docs
 
-    def _resolve_page_image(self, doc: Document, page_num: int, sign_url_cache: Optional[Dict[str, str]] = None) -> Optional[str]:
+    def _resolve_page_image(
+        self, doc: Document, page_num: int, sign_url_cache: Optional[Dict[str, str]] = None
+    ) -> Optional[str]:
         """Resolve a page image reference for the given physical page number.
 
         Returns a signed OSS URL when ``page_image_storage`` is configured,
@@ -3956,8 +4044,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
                     parsed = urlparse(own_url)
                     # Extract file extension from the path
-                    path_suffix = "." + parsed.path.rsplit(".", 1)[-1] \
-                        if "." in parsed.path.rsplit("/", 1)[-1] else ".webp"
+                    path_suffix = (
+                        "." + parsed.path.rsplit(".", 1)[-1] if "." in parsed.path.rsplit("/", 1)[-1] else ".webp"
+                    )
 
                     # Replace the filename in the path
                     path_parts = parsed.path.rsplit("/", 1)
@@ -4117,12 +4206,16 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     page_num = int(page_num)
                 except (TypeError, ValueError):
                     page_num = 0
-                _docs.append((
-                    Image(url=page_image_url) if page_image_url.startswith("http") else Image(filepath=page_image_url),
-                    doc.name or "",
-                    page_num,
-                    doc.meta_data,
-                ))
+                _docs.append(
+                    (
+                        Image(url=page_image_url)
+                        if page_image_url.startswith("http")
+                        else Image(filepath=page_image_url),
+                        doc.name or "",
+                        page_num,
+                        doc.meta_data,
+                    )
+                )
             return _docs
 
         # 3. Case: Window expansion (±image_window_size)
@@ -4221,7 +4314,11 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
             http_urls = [r for _, _, r in image_refs if r.startswith(("http://", "https://"))]
             if http_urls:
                 accessible_urls = self._batch_check_urls_accessible(http_urls)
-                image_refs = [(d, p, r) for d, p, r in image_refs if not r.startswith(("http://", "https://")) or r in accessible_urls]
+                image_refs = [
+                    (d, p, r)
+                    for d, p, r in image_refs
+                    if not r.startswith(("http://", "https://")) or r in accessible_urls
+                ]
 
         # Order by source file similarity (desc), then page number (asc)
         image_refs.sort(key=lambda x: (-best_score_by_doc.get(x[0], 0.0), x[0], x[1]))

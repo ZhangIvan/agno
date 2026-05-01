@@ -167,14 +167,14 @@ class TencentCOSStorage(PageImageStorage):
             for proto in ["https://", "http://"]:
                 prefix = f"{proto}{domain_stripped}/"
                 if url.startswith(prefix):
-                    return url[len(prefix):].split("?")[0]
+                    return url[len(prefix) :].split("?")[0]
 
         # Standard format: https://{bucket}-cos.{region}.myqcloud.com/{key}
         base = f"{self.bucket_name}-cos.{self.region}.myqcloud.com"
         for proto in ["https://", "http://"]:
             prefix = f"{proto}{base}/"
             if url.startswith(prefix):
-                return url[len(prefix):].split("?")[0]
+                return url[len(prefix) :].split("?")[0]
 
         return None
 

@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 
 from agno.knowledge.document import Document
 from agno.knowledge.reranker.base import Reranker
-from agno.utils.log import logger
+from agno.utils.log import log_error, logger
 
 try:
     from infinity_client import AuthenticatedClient, Client
@@ -100,7 +100,7 @@ class InfinityReranker(Reranker):
                 result = rerank.sync(client=client, body=body)
 
                 if result is None:
-                    logger.error("Rerank request returned None")
+                    log_error("Rerank request returned None")
                     return documents
 
                 # Process the response
@@ -128,8 +128,8 @@ class InfinityReranker(Reranker):
                 if self.score_threshold is not None:
                     compressed_docs = [doc for doc in compressed_docs if doc.reranking_score >= self.score_threshold]
 
-        except Exception as e:
-            logger.error(f"Error connecting to Infinity server at {self.base_url}: {e}")
+        except Exception:
+            logger.exception(f"Error connecting to Infinity server at {self.base_url}")
             return documents
 
         return compressed_docs
@@ -137,8 +137,8 @@ class InfinityReranker(Reranker):
     def rerank(self, query: str, documents: List[Document]) -> List[Document]:
         try:
             return self._rerank(query=query, documents=documents)
-        except Exception as e:
-            logger.error(f"Error reranking documents: {e}. Returning original documents")
+        except Exception:
+            logger.exception("Error reranking documents. Returning original documents")
             return documents
 
     async def arerank(self, query: str, documents: List[Document]) -> List[Document]:
@@ -181,7 +181,7 @@ class InfinityReranker(Reranker):
                 result = await rerank.asyncio(client=client, body=body)
 
                 if result is None:
-                    logger.error("Async rerank request returned None")
+                    log_error("Async rerank request returned None")
                     return documents
 
                 # Process the response
@@ -209,8 +209,8 @@ class InfinityReranker(Reranker):
                 if self.score_threshold is not None:
                     compressed_docs = [doc for doc in compressed_docs if doc.reranking_score >= self.score_threshold]
 
-        except Exception as e:
-            logger.error(f"Error connecting to Infinity server at {self.base_url}: {e}")
+        except Exception:
+            logger.exception(f"Error connecting to Infinity server at {self.base_url}")
             return documents
 
         return compressed_docs

@@ -43,8 +43,7 @@ def build_page_image_tool_result(
 
     images = [img for img, _, _, _ in image_results]
     source_info = ". ".join(
-        f"* 图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}"
-        f"(来源: {name}, 第{page}页)"
+        f"* 图片{os.path.basename(urlparse(img.url or str(img.filepath or '')).path)}(来源: {name}, 第{page}页)"
         for img, name, page, meta in image_results
     )
     return ToolResult(

@@ -54,7 +54,7 @@ class ByteDanceTOSStorage(PageImageStorage):
             endpoint=self._strip_protocol(self.endpoint),
             region=self.region,
             max_retry_count=3,
-            is_custom_domain=True if self.custom_domain else False
+            is_custom_domain=True if self.custom_domain else False,
         )
         return self._client
 
@@ -113,7 +113,9 @@ class ByteDanceTOSStorage(PageImageStorage):
             return base_url
         return self.get_signed_url(key, expires)
 
-    def get_signed_url(self, key: str, expires: int = 3600, header: Optional[Dict] = None, query: Optional[Dict] = None) -> str:
+    def get_signed_url(
+        self, key: str, expires: int = 3600, header: Optional[Dict] = None, query: Optional[Dict] = None
+    ) -> str:
         log_debug(f"ByteDanceTOS sign_url: {key}  expires={expires}s")
         try:
             from tos.enum import HttpMethodType
@@ -174,14 +176,14 @@ class ByteDanceTOSStorage(PageImageStorage):
             for proto in ["https://", "http://"]:
                 prefix = f"{proto}{domain_stripped}/"
                 if url.startswith(prefix):
-                    return url[len(prefix):].split("?")[0]
+                    return url[len(prefix) :].split("?")[0]
 
         # Standard format: https://{bucket}.{endpoint}/{key}
         base = f"{self.bucket_name}.{self._strip_protocol(self.endpoint)}"
         for proto in ["https://", "http://"]:
             prefix = f"{proto}{base}/"
             if url.startswith(prefix):
-                return url[len(prefix):].split("?")[0]
+                return url[len(prefix) :].split("?")[0]
 
         return None
 

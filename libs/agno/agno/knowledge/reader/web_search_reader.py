@@ -12,7 +12,7 @@ from agno.knowledge.chunking.strategy import ChunkingStrategy, ChunkingStrategyT
 from agno.knowledge.document.base import Document
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.types import ContentType
-from agno.utils.log import log_debug, logger
+from agno.utils.log import log_debug, log_error, log_warning, logger
 
 try:
     from bs4 import BeautifulSoup, Tag  # noqa: F401
@@ -50,7 +50,12 @@ class WebSearchReader(Reader):
     _last_search_time: float = field(default=0.0, init=False)
 
     # Override default chunking strategy
-    chunking_strategy: Optional[ChunkingStrategy] = SemanticChunking()
+    chunking_strategy: Optional[ChunkingStrategy] = None
+
+    def __post_init__(self):
+        """Initialize chunking strategy with proper chunk_size"""
+        if self.chunking_strategy is None:
+            self.chunking_strategy = SemanticChunking(chunk_size=self.chunk_size)
 
     @classmethod
     def get_supported_chunking_strategies(cls) -> List[ChunkingStrategyType]:
@@ -106,7 +111,7 @@ class WebSearchReader(Reader):
                 return results
 
             except Exception as e:
-                logger.warning(f"DuckDuckGo search attempt {attempt + 1} failed: {e}")
+                log_warning(f"DuckDuckGo search attempt {attempt + 1} failed: {str(e)}")
                 if "rate limit" in str(e).lower() or "429" in str(e):
                     # Rate limited - wait longer
                     wait_time = (
@@ -158,7 +163,7 @@ class WebSearchReader(Reader):
             return text
 
         except Exception as e:
-            logger.warning(f"Error extracting text from {url}: {e}")
+            log_warning(f"Error extracting text from {url}: {str(e)}")
             return html_content
 
     def _fetch_url_content(self, url: str) -> Optional[str]:
@@ -179,12 +184,12 @@ class WebSearchReader(Reader):
                     return response.text
 
             except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
+                log_warning(f"Attempt {attempt + 1} failed for {url}: {str(e)}")
                 if attempt < self.max_retries - 1:
                     time.sleep(random.uniform(1, 3))  # Random delay between retries
                 continue
 
-        logger.error(f"Failed to fetch content from {url} after {self.max_retries} attempts")
+        log_error(f"Failed to fetch content from {url} after {self.max_retries} attempts")
         return None
 
     def _create_document_from_url(self, url: str, content: str, search_result: Dict[str, str]) -> Document:
@@ -318,6 +323,7 @@ class WebSearchReader(Reader):
 
                 if len(documents) >= self.max_results:
                     break
+
         documents = [doc for doc in documents if doc and doc.content]
         log_debug(f"Created {len(documents)} documents from async web search")
         return documents

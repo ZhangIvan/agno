@@ -22,15 +22,17 @@ class DocxReader(Reader):
 
     def __init__(
         self,
-        chunking_strategy: Optional[ChunkingStrategy] = DocumentChunking(),
+        chunking_strategy: Optional[ChunkingStrategy] = None,
         capture_pages: bool = True,
         pages_cache_dir: Optional[str] = None,
         image_dpi: int = 150,
         **kwargs,
     ):
+        if chunking_strategy is None:
+            chunk_size = kwargs.get("chunk_size", 5000)
+            chunking_strategy = DocumentChunking(chunk_size=chunk_size)
         self.capture_pages = capture_pages
         self.pages_cache_dir = pages_cache_dir or os.getenv("AGNO_PAGE_CACHE_DIR")
-
         self.image_dpi = image_dpi
         super().__init__(chunking_strategy=chunking_strategy, **kwargs)
 
@@ -67,7 +69,10 @@ class DocxReader(Reader):
                 docx_document = DocxDocument(file)
                 doc_name = name or getattr(file, "name", "docx_file").split(".")[0]
                 if self.capture_pages:
-                    import os, shutil, tempfile
+                    import os
+                    import shutil
+                    import tempfile
+
                     if hasattr(file, "seek"):
                         file.seek(0)
                     _tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
@@ -95,6 +100,7 @@ class DocxReader(Reader):
             if self.capture_pages and file_path and result:
                 try:
                     from agno.knowledge.reader.page_capture import capture_docx_pages, get_page_cache_dir
+
                     cache_dir = get_page_cache_dir(self.pages_cache_dir, doc_name)
                     page_images = capture_docx_pages(file_path, cache_dir, dpi=self.image_dpi)
                     total_pages = len(page_images)
@@ -142,6 +148,7 @@ class DocxReader(Reader):
             if _tmp_capture_path:
                 try:
                     import os
+
                     os.unlink(_tmp_capture_path)
                 except OSError:
                     pass

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -17,12 +16,12 @@ from typing import (
 if TYPE_CHECKING:
     from agno.agent.agent import Agent
 
+from agno.agent._utils import _strip_doc_metadata
 from agno.culture.manager import CultureManager
 from agno.db.base import BaseDb, SessionType
 from agno.filters import FilterExpr
 from agno.knowledge.types import KnowledgeFilter
 from agno.knowledge.utils import build_page_image_tool_result
-from agno.agent._utils import _strip_doc_metadata
 from agno.memory import MemoryManager
 from agno.models.message import Message, MessageReferences
 from agno.run import RunContext
@@ -181,7 +180,7 @@ def create_knowledge_search_tool(
                     run_context=run_context,
                 )
             except Exception as e:
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
             _track_references(docs, query, retrieval_timer.elapsed)
             retrieval_timer.stop()
@@ -213,7 +212,7 @@ def create_knowledge_search_tool(
                     run_context=run_context,
                 )
             except Exception as e:
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
             _track_references(docs, query, retrieval_timer.elapsed)
             retrieval_timer.stop()
@@ -255,7 +254,9 @@ def create_knowledge_search_tool(
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        ref_dicts = (
+                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        )
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
@@ -271,7 +272,7 @@ def create_knowledge_search_tool(
                     run_context=run_context,
                 )
             except Exception as e:
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
             _track_references(docs, query, retrieval_timer.elapsed)
             retrieval_timer.stop()
@@ -306,7 +307,9 @@ def create_knowledge_search_tool(
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
                     if raw_docs:
-                        ref_dicts = [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        ref_dicts = (
+                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
+                        )
                         _track_references(ref_dicts, query, retrieval_timer.elapsed)
                         images = resolved_knowledge._get_page_images_for_docs(raw_docs)
                         if images:
@@ -322,7 +325,7 @@ def create_knowledge_search_tool(
                     run_context=run_context,
                 )
             except Exception as e:
-                log_warning(f"Knowledge search failed: {e}")
+                log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
             _track_references(docs, query, retrieval_timer.elapsed)
             retrieval_timer.stop()

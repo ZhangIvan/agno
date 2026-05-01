@@ -17,7 +17,10 @@ class JSONReader(Reader):
 
     chunk: bool = False
 
-    def __init__(self, chunking_strategy: Optional[ChunkingStrategy] = FixedSizeChunking(), **kwargs):
+    def __init__(self, chunking_strategy: Optional[ChunkingStrategy] = None, **kwargs):
+        if chunking_strategy is None:
+            chunk_size = kwargs.get("chunk_size", 5000)
+            chunking_strategy = FixedSizeChunking(chunk_size=chunk_size)
         super().__init__(chunking_strategy=chunking_strategy, **kwargs)
 
     @classmethod
@@ -62,7 +65,8 @@ class JSONReader(Reader):
                     meta_data={"page": page_number},
                     content=json.dumps(content),
                 )
-                for page_number, content in enumerate(json_contents, start=1) if content
+                for page_number, content in enumerate(json_contents, start=1)
+                if content
             ]
             if self.chunk:
                 chunked_documents = []
@@ -73,7 +77,7 @@ class JSONReader(Reader):
         except (FileNotFoundError, ValueError, json.JSONDecodeError):
             raise
         except Exception as e:
-            log_error(f"Error reading: {path}: {e}")
+            log_error(f"Error reading: {path}: {str(e)}")
             raise
 
     async def async_read(self, path: Union[Path, IO[Any]], name: Optional[str] = None) -> List[Document]:

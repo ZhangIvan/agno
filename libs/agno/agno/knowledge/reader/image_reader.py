@@ -73,9 +73,12 @@ class ImageReader(Reader):
                 src.seek(0)
 
         img.save(
-            cache_path, "WEBP", quality=webp_quality, method=4,
+            cache_path,
+            "WEBP",
+            quality=webp_quality,
+            method=4,
             lossless=False,  # 有损 = 体积暴减
-            optimize=True  # 额外优化文件大小
+            optimize=True,  # 额外优化文件大小
         )
         return cache_path, cache_dir
 
