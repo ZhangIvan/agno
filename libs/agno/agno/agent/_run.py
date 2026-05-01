@@ -6,6 +6,7 @@ import asyncio
 import time
 import warnings
 from collections import deque
+from contextlib import contextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -109,6 +110,23 @@ from agno.utils.response import get_paused_content
 # Strong references to background tasks so they aren't garbage-collected mid-execution.
 # See: https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
 _background_tasks: set[asyncio.Task[None]] = set()
+
+
+@contextmanager
+def _user_message_prefix(agent: Agent, run_messages: RunMessages):
+    """Temporarily prepend user_message_prefix to the user message. Restores original content on exit."""
+    original = None
+    if agent.user_message_prefix is not None and run_messages.user_message is not None:
+        prefix = agent.user_message_prefix(agent) if callable(agent.user_message_prefix) else agent.user_message_prefix
+        if prefix and isinstance(run_messages.user_message.content, str):
+            original = run_messages.user_message.content
+            run_messages.user_message.content = f"{prefix}\n\n{original}"
+    try:
+        yield
+    finally:
+        if original is not None and run_messages.user_message is not None:
+            run_messages.user_message.content = original
+
 
 # ---------------------------------------------------------------------------
 # Run dependency resolution
@@ -506,16 +524,17 @@ def _run(
                 # 6. Generate a response from the Model (includes running function calls)
                 agent.model = cast(Model, agent.model)
 
-                model_response: ModelResponse = agent.model.response(
-                    messages=run_messages.messages,
-                    tools=_tools,
-                    tool_choice=agent.tool_choice,
-                    tool_call_limit=agent.tool_call_limit,
-                    response_format=response_format,
-                    run_response=run_response,
-                    send_media_to_model=agent.send_media_to_model,
-                    compression_manager=agent.compression_manager if agent.compress_tool_results else None,
-                )
+                with _user_message_prefix(agent, run_messages):
+                    model_response: ModelResponse = agent.model.response(
+                        messages=run_messages.messages,
+                        tools=_tools,
+                        tool_choice=agent.tool_choice,
+                        tool_call_limit=agent.tool_call_limit,
+                        response_format=response_format,
+                        run_response=run_response,
+                        send_media_to_model=agent.send_media_to_model,
+                        compression_manager=agent.compression_manager if agent.compress_tool_results else None,
+                    )
 
                 # Check for cancellation after model call
                 raise_if_cancelled(run_response.run_id)  # type: ignore
@@ -905,57 +924,58 @@ def _run_stream(
                 raise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # 6. Process model response
-                if agent.output_model is None:
-                    for event in handle_model_response_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        tools=_tools,
-                        response_format=response_format,
-                        stream_events=stream_events,
-                        session_state=run_context.session_state,
-                        run_context=run_context,
-                    ):
-                        raise_if_cancelled(run_response.run_id)  # type: ignore
-                        yield event
-                else:
-                    from agno.run.agent import (
-                        IntermediateRunContentEvent,
-                        RunContentEvent,
-                    )  # type: ignore
-
-                    for event in handle_model_response_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        tools=_tools,
-                        response_format=response_format,
-                        stream_events=stream_events,
-                        session_state=run_context.session_state,
-                        run_context=run_context,
-                    ):
-                        raise_if_cancelled(run_response.run_id)  # type: ignore
-                        if isinstance(event, RunContentEvent):
-                            if stream_events:
-                                yield IntermediateRunContentEvent(
-                                    content=event.content,
-                                    content_type=event.content_type,
-                                )
-                        else:
+                with _user_message_prefix(agent, run_messages):
+                    if agent.output_model is None:
+                        for event in handle_model_response_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            tools=_tools,
+                            response_format=response_format,
+                            stream_events=stream_events,
+                            session_state=run_context.session_state,
+                            run_context=run_context,
+                        ):
+                            raise_if_cancelled(run_response.run_id)  # type: ignore
                             yield event
+                    else:
+                        from agno.run.agent import (
+                            IntermediateRunContentEvent,
+                            RunContentEvent,
+                        )  # type: ignore
 
-                    # If an output model is provided, generate output using the output model
-                    for event in generate_response_with_output_model_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        stream_events=stream_events,
-                    ):
-                        raise_if_cancelled(run_response.run_id)  # type: ignore
-                        yield event  # type: ignore
+                        for event in handle_model_response_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            tools=_tools,
+                            response_format=response_format,
+                            stream_events=stream_events,
+                            session_state=run_context.session_state,
+                            run_context=run_context,
+                        ):
+                            raise_if_cancelled(run_response.run_id)  # type: ignore
+                            if isinstance(event, RunContentEvent):
+                                if stream_events:
+                                    yield IntermediateRunContentEvent(
+                                        content=event.content,
+                                        content_type=event.content_type,
+                                    )
+                            else:
+                                yield event
+
+                        # If an output model is provided, generate output using the output model
+                        for event in generate_response_with_output_model_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            stream_events=stream_events,
+                        ):
+                            raise_if_cancelled(run_response.run_id)  # type: ignore
+                            yield event  # type: ignore
 
                 # Check for cancellation after model processing
                 raise_if_cancelled(run_response.run_id)  # type: ignore
@@ -1588,16 +1608,17 @@ async def _arun(
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # 9. Generate a response from the Model (includes running function calls)
-                model_response: ModelResponse = await agent.model.aresponse(
-                    messages=run_messages.messages,
-                    tools=_tools,
-                    tool_choice=agent.tool_choice,
-                    tool_call_limit=agent.tool_call_limit,
-                    response_format=response_format,
-                    send_media_to_model=agent.send_media_to_model,
-                    run_response=run_response,
-                    compression_manager=agent.compression_manager if agent.compress_tool_results else None,
-                )
+                with _user_message_prefix(agent, run_messages):
+                    model_response: ModelResponse = await agent.model.aresponse(
+                        messages=run_messages.messages,
+                        tools=_tools,
+                        tool_choice=agent.tool_choice,
+                        tool_call_limit=agent.tool_call_limit,
+                        response_format=response_format,
+                        send_media_to_model=agent.send_media_to_model,
+                        run_response=run_response,
+                        compression_manager=agent.compression_manager if agent.compress_tool_results else None,
+                    )
 
                 # Check for cancellation after model call
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
@@ -2099,57 +2120,58 @@ async def _arun_stream(
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
 
                 # 9. Generate a response from the Model
-                if agent.output_model is None:
-                    async for event in ahandle_model_response_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        tools=_tools,
-                        response_format=response_format,
-                        stream_events=stream_events,
-                        session_state=run_context.session_state,
-                        run_context=run_context,
-                    ):
-                        await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        yield event
-                else:
-                    from agno.run.agent import (
-                        IntermediateRunContentEvent,
-                        RunContentEvent,
-                    )  # type: ignore
-
-                    async for event in ahandle_model_response_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        tools=_tools,
-                        response_format=response_format,
-                        stream_events=stream_events,
-                        session_state=run_context.session_state,
-                        run_context=run_context,
-                    ):
-                        await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        if isinstance(event, RunContentEvent):
-                            if stream_events:
-                                yield IntermediateRunContentEvent(
-                                    content=event.content,
-                                    content_type=event.content_type,
-                                )
-                        else:
+                with _user_message_prefix(agent, run_messages):
+                    if agent.output_model is None:
+                        async for event in ahandle_model_response_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            tools=_tools,
+                            response_format=response_format,
+                            stream_events=stream_events,
+                            session_state=run_context.session_state,
+                            run_context=run_context,
+                        ):
+                            await araise_if_cancelled(run_response.run_id)  # type: ignore
                             yield event
+                    else:
+                        from agno.run.agent import (
+                            IntermediateRunContentEvent,
+                            RunContentEvent,
+                        )  # type: ignore
 
-                    # If an output model is provided, generate output using the output model
-                    async for event in agenerate_response_with_output_model_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        stream_events=stream_events,
-                    ):
-                        await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        yield event  # type: ignore
+                        async for event in ahandle_model_response_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            tools=_tools,
+                            response_format=response_format,
+                            stream_events=stream_events,
+                            session_state=run_context.session_state,
+                            run_context=run_context,
+                        ):
+                            await araise_if_cancelled(run_response.run_id)  # type: ignore
+                            if isinstance(event, RunContentEvent):
+                                if stream_events:
+                                    yield IntermediateRunContentEvent(
+                                        content=event.content,
+                                        content_type=event.content_type,
+                                    )
+                            else:
+                                yield event
+
+                        # If an output model is provided, generate output using the output model
+                        async for event in agenerate_response_with_output_model_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            stream_events=stream_events,
+                        ):
+                            await araise_if_cancelled(run_response.run_id)  # type: ignore
+                            yield event  # type: ignore
 
                 # Check for cancellation after model processing
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
@@ -2940,16 +2962,17 @@ def _continue_run(
 
                 # 2. Generate a response from the Model (includes running function calls)
                 agent.model = cast(Model, agent.model)
-                model_response: ModelResponse = agent.model.response(
-                    messages=run_messages.messages,
-                    response_format=response_format,
-                    tools=tools,
-                    tool_choice=agent.tool_choice,
-                    tool_call_limit=agent.tool_call_limit,
-                    run_response=run_response,
-                    send_media_to_model=agent.send_media_to_model,
-                    compression_manager=agent.compression_manager if agent.compress_tool_results else None,
-                )
+                with _user_message_prefix(agent, run_messages):
+                    model_response: ModelResponse = agent.model.response(
+                        messages=run_messages.messages,
+                        response_format=response_format,
+                        tools=tools,
+                        tool_choice=agent.tool_choice,
+                        tool_call_limit=agent.tool_call_limit,
+                        run_response=run_response,
+                        send_media_to_model=agent.send_media_to_model,
+                        compression_manager=agent.compression_manager if agent.compress_tool_results else None,
+                    )
 
                 # Check for cancellation after model processing
                 raise_if_cancelled(run_response.run_id)  # type: ignore
@@ -3162,18 +3185,19 @@ def _continue_run_stream(
                 )
 
                 # 3. Process model response
-                for event in handle_model_response_stream(
-                    agent,
-                    session=session,
-                    run_response=run_response,
-                    run_messages=run_messages,
-                    tools=tools,
-                    response_format=response_format,
-                    stream_events=stream_events,
-                    session_state=run_context.session_state,
-                    run_context=run_context,
-                ):
-                    yield event
+                with _user_message_prefix(agent, run_messages):
+                    for event in handle_model_response_stream(
+                        agent,
+                        session=session,
+                        run_response=run_response,
+                        run_messages=run_messages,
+                        tools=tools,
+                        response_format=response_format,
+                        stream_events=stream_events,
+                        session_state=run_context.session_state,
+                        run_context=run_context,
+                    ):
+                        yield event
 
                 # Parse response with parser model if provided
                 yield from parse_response_with_parser_model_stream(
@@ -3705,16 +3729,17 @@ async def _acontinue_run(
                 )
 
                 # 8. Get model response
-                model_response: ModelResponse = await agent.model.aresponse(
-                    messages=run_messages.messages,
-                    response_format=response_format,
-                    tools=_tools,
-                    tool_choice=agent.tool_choice,
-                    tool_call_limit=agent.tool_call_limit,
-                    run_response=run_response,
-                    send_media_to_model=agent.send_media_to_model,
-                    compression_manager=agent.compression_manager if agent.compress_tool_results else None,
-                )
+                with _user_message_prefix(agent, run_messages):
+                    model_response: ModelResponse = await agent.model.aresponse(
+                        messages=run_messages.messages,
+                        response_format=response_format,
+                        tools=_tools,
+                        tool_choice=agent.tool_choice,
+                        tool_call_limit=agent.tool_call_limit,
+                        run_response=run_response,
+                        send_media_to_model=agent.send_media_to_model,
+                        compression_manager=agent.compression_manager if agent.compress_tool_results else None,
+                    )
                 # Check for cancellation after model call
                 await araise_if_cancelled(run_response.run_id)  # type: ignore
 
@@ -4091,55 +4116,56 @@ async def _acontinue_run_stream(
                     yield event
 
                 # 8. Process model response
-                if agent.output_model is None:
-                    async for event in ahandle_model_response_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        tools=_tools,
-                        response_format=response_format,
-                        stream_events=stream_events,
-                        run_context=run_context,
-                    ):
-                        await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        yield event
-                else:
-                    from agno.run.agent import (
-                        IntermediateRunContentEvent,
-                        RunContentEvent,
-                    )  # type: ignore
-
-                    async for event in ahandle_model_response_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        tools=_tools,
-                        response_format=response_format,
-                        stream_events=stream_events,
-                        run_context=run_context,
-                    ):
-                        await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        if isinstance(event, RunContentEvent):
-                            if stream_events:
-                                yield IntermediateRunContentEvent(
-                                    content=event.content,
-                                    content_type=event.content_type,
-                                )
-                        else:
+                with _user_message_prefix(agent, run_messages):
+                    if agent.output_model is None:
+                        async for event in ahandle_model_response_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            tools=_tools,
+                            response_format=response_format,
+                            stream_events=stream_events,
+                            run_context=run_context,
+                        ):
+                            await araise_if_cancelled(run_response.run_id)  # type: ignore
                             yield event
+                    else:
+                        from agno.run.agent import (
+                            IntermediateRunContentEvent,
+                            RunContentEvent,
+                        )  # type: ignore
 
-                    # If an output model is provided, generate output using the output model
-                    async for event in agenerate_response_with_output_model_stream(
-                        agent,
-                        session=agent_session,
-                        run_response=run_response,
-                        run_messages=run_messages,
-                        stream_events=stream_events,
-                    ):
-                        await araise_if_cancelled(run_response.run_id)  # type: ignore
-                        yield event  # type: ignore
+                        async for event in ahandle_model_response_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            tools=_tools,
+                            response_format=response_format,
+                            stream_events=stream_events,
+                            run_context=run_context,
+                        ):
+                            await araise_if_cancelled(run_response.run_id)  # type: ignore
+                            if isinstance(event, RunContentEvent):
+                                if stream_events:
+                                    yield IntermediateRunContentEvent(
+                                        content=event.content,
+                                        content_type=event.content_type,
+                                    )
+                            else:
+                                yield event
+
+                        # If an output model is provided, generate output using the output model
+                        async for event in agenerate_response_with_output_model_stream(
+                            agent,
+                            session=agent_session,
+                            run_response=run_response,
+                            run_messages=run_messages,
+                            stream_events=stream_events,
+                        ):
+                            await araise_if_cancelled(run_response.run_id)  # type: ignore
+                            yield event  # type: ignore
 
                 # Check for cancellation after model processing
                 await araise_if_cancelled(run_response.run_id)  # type: ignore

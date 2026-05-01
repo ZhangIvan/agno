@@ -268,6 +268,11 @@ class Agent:
     # Use these for few-shot learning or to provide additional context to the Model.
     # Note: these are not retained in memory, they are added directly to the messages sent to the model.
     additional_input: Optional[List[Union[str, Dict, BaseModel, Message]]] = None
+    # --- User message prefix ---
+    # Dynamic prefix prepended to user messages to reinforce instruction following.
+    # Sent to the LLM but NOT persisted to the database or conversation history.
+    # Supports str or Callable[[Agent], str] for dynamic content.
+    user_message_prefix: Optional[Union[str, Callable[..., str]]] = None
     # --- User message settings ---
     # Role for the user message
     user_message_role: str = "user"
@@ -456,6 +461,7 @@ class Agent:
         learning: Optional[Union[bool, LearningMachine]] = None,
         add_learnings_to_context: bool = True,
         additional_input: Optional[List[Union[str, Dict, BaseModel, Message]]] = None,
+        user_message_prefix: Optional[Union[str, Callable[..., str]]] = None,
         user_message_role: str = "user",
         build_user_context: bool = True,
         retries: int = 0,
@@ -619,6 +625,7 @@ class Agent:
         self.learning = learning
         self.add_learnings_to_context = add_learnings_to_context
         self.additional_input = additional_input
+        self.user_message_prefix = user_message_prefix
         self.user_message_role = user_message_role
         self.build_user_context = build_user_context
 
