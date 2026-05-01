@@ -35,6 +35,7 @@ wip
 
 # ignore dist dir
 dist
+dist-*/
 
 # ignore virtualenvs
 .venv*
