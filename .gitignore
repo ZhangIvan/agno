@@ -100,3 +100,9 @@ CLAUDE_PRIVATE.md
 pyrightconfig.json
 .python-version
 CLAUDE_PRIVATE.md
+
+# graphify
+/libs/agno/graphify-out/
+/.graphify_python
+/.graphify_uncached.txt
+/graphify-out/
