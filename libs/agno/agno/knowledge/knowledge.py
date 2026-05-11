@@ -9,6 +9,7 @@ from io import BytesIO
 from os.path import basename
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
+from urllib.parse import urlparse, unquote
 
 from httpx import AsyncClient
 
@@ -27,15 +28,47 @@ from agno.knowledge.storage.base import PageImageStorage
 from agno.knowledge.types import ContentType
 from agno.knowledge.utils import (
     build_page_image_tool_result,
+    detect_real_extension,
+    detect_real_extension_from_file,
     merge_user_metadata,
     set_agno_metadata,
     strip_agno_metadata,
+    multi_unquote,
 )
 from agno.utils.http import async_fetch_with_retry
 from agno.utils.log import log_debug, log_error, log_info, log_warning
 from agno.utils.string import generate_id
 
 ContentDict = Dict[str, Union[str, Dict[str, str]]]
+
+
+def _extract_name_from_url(url: str) -> Optional[str]:
+    """Extract filename stem from a URL for use as document name.
+
+    Uses string operations (not pathlib.Path) so behaviour is identical
+    on Windows and POSIX regardless of the platform's path separator.
+    """
+    try:
+        parsed = urlparse(url)
+        path = unquote(parsed.path)
+        if not path or path == "/":
+            return None
+        filename = path.rsplit("/", 1)[-1]
+        if not filename:
+            return None
+        return multi_unquote(filename) or None
+    except Exception:
+        return None
+
+
+_INTERNAL_FILTER_FIELDS = frozenset({"_source_file_url"})
+
+
+def _filters_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return a copy of metadata with internal fields stripped for use as vector_db filters."""
+    if not metadata:
+        return metadata
+    return {k: v for k, v in metadata.items() if k not in _INTERNAL_FILTER_FIELDS}
 
 
 class KnowledgeContentOrigin(Enum):
@@ -1365,6 +1398,10 @@ class Knowledge(RemoteKnowledge):
                 document.size = len(document.content.encode("utf-8"))
             if metadata:
                 document.meta_data.update(metadata)
+                if "_source_file_url" in metadata:
+                    _source_name = _extract_name_from_url(metadata["_source_file_url"])
+                    if _source_name:
+                        document.name = _source_name
             document.meta_data["linked_to"] = self.name or ""
         return documents
 
@@ -1424,7 +1461,8 @@ class Knowledge(RemoteKnowledge):
                 if content.reader:
                     reader = content.reader
                 else:
-                    reader = ReaderFactory.get_reader_for_extension(path.suffix)
+                    real_ext = detect_real_extension_from_file(path)
+                    reader, _ = self._select_reader_by_extension(real_ext or path.suffix)
                     log_debug(f"Using Reader: {reader.__class__.__name__}")
 
                 if reader:
@@ -1511,8 +1549,8 @@ class Knowledge(RemoteKnowledge):
                 if content.reader:
                     reader = content.reader
                 else:
-                    reader = ReaderFactory.get_reader_for_extension(path.suffix)
-                    log_debug(f"Using Reader: {reader.__class__.__name__}")
+                    real_ext = detect_real_extension_from_file(path)
+                    reader, _ = self._select_reader_by_extension(real_ext or path.suffix)
 
                 if reader:
                     password = content.auth.password if content.auth and content.auth.password is not None else None
@@ -1667,6 +1705,10 @@ class Knowledge(RemoteKnowledge):
             # 4. Select reader
             name = content.name if content.name else content.url
             if file_extension:
+                if file_source and not content.reader:
+                    real_ext = detect_real_extension_from_file(file_source)
+                    if real_ext:
+                        file_extension = real_ext
                 reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
                 if default_name and file_extension == ".csv":
                     name = basename(parsed_url.path) or default_name
@@ -1725,13 +1767,13 @@ class Knowledge(RemoteKnowledge):
                 # Insert with per-document hash
                 if self.vector_db.upsert_available() and upsert:
                     try:
-                        await self.vector_db.async_upsert(doc_hash, source_docs, content.metadata)
+                        await self.vector_db.async_upsert(doc_hash, source_docs, _filters_from_metadata(content.metadata))
                     except Exception as e:
                         log_error(f"Error upserting document from {source_url}: {e}", exc_info=True)
                         continue
                 else:
                     try:
-                        await self.vector_db.async_insert(doc_hash, documents=source_docs, filters=content.metadata)
+                        await self.vector_db.async_insert(doc_hash, documents=source_docs, filters=_filters_from_metadata(content.metadata))
                     except Exception as e:
                         log_error(f"Error inserting document from {source_url}: {e}", exc_info=True)
                         continue
@@ -1862,6 +1904,10 @@ class Knowledge(RemoteKnowledge):
             # 4. Select reader
             name = content.name if content.name else content.url
             if file_extension:
+                if file_source and not content.reader:
+                    real_ext = detect_real_extension_from_file(file_source)
+                    if real_ext:
+                        file_extension = real_ext
                 reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
                 if default_name and file_extension == ".csv":
                     name = basename(parsed_url.path) or default_name
@@ -1921,13 +1967,13 @@ class Knowledge(RemoteKnowledge):
                 # Insert with per-document hash
                 if self.vector_db.upsert_available() and upsert:
                     try:
-                        self.vector_db.upsert(doc_hash, source_docs, content.metadata)
+                        self.vector_db.upsert(doc_hash, source_docs, _filters_from_metadata(content.metadata))
                     except Exception as e:
                         log_error(f"Error upserting document from {source_url}: {e}", exc_info=True)
                         continue
                 else:
                     try:
-                        self.vector_db.insert(doc_hash, documents=source_docs, filters=content.metadata)
+                        self.vector_db.insert(doc_hash, documents=source_docs, filters=_filters_from_metadata(content.metadata))
                     except Exception as e:
                         log_error(f"Error inserting document from {source_url}: {e}", exc_info=True)
                         continue
@@ -2031,19 +2077,17 @@ class Knowledge(RemoteKnowledge):
                 else:
                     content_io = content.file_data.content  # type: ignore
 
-                # Respect an explicitly provided reader; otherwise select based on file type
+                # Respect explicitly provided reader; otherwise detect from content
                 if content.reader:
                     log_debug(f"Using reader: {content.reader.__class__.__name__} to read content")
                     reader = content.reader
                 else:
-                    # Prefer filename extension over MIME type for reader selection
-                    # (browsers often send wrong MIME types for Excel files)
-                    reader_hint = content.file_data.type
-                    if content.file_data.filename:
-                        ext = Path(content.file_data.filename).suffix.lower()
-                        if ext:
-                            reader_hint = ext
-                    reader = self._select_reader(reader_hint)
+                    upload_bytes = content.file_data.content if isinstance(content.file_data.content, bytes) else None
+                    if upload_bytes:
+                        real_ext = detect_real_extension(upload_bytes[:2048])
+                    else:
+                        real_ext = Path(content.file_data.filename).suffix.lower() if content.file_data.filename else ""
+                    reader, _ = self._select_reader_by_extension(real_ext)
                 # Use file_data.filename for reader (preserves extension for format detection)
                 reader_name = content.file_data.filename or content.name or f"content_{content.file_data.type}"
                 read_documents = await reader.async_read(content_io, name=reader_name)
@@ -2141,19 +2185,17 @@ class Knowledge(RemoteKnowledge):
                 else:
                     content_io = content.file_data.content  # type: ignore
 
-                # Respect an explicitly provided reader; otherwise select based on file type
+                # Respect explicitly provided reader; otherwise detect from content
                 if content.reader:
                     log_debug(f"Using reader: {content.reader.__class__.__name__} to read content")
                     reader = content.reader
                 else:
-                    # Prefer filename extension over MIME type for reader selection
-                    # (browsers often send wrong MIME types for Excel files)
-                    reader_hint = content.file_data.type
-                    if content.file_data.filename:
-                        ext = Path(content.file_data.filename).suffix.lower()
-                        if ext:
-                            reader_hint = ext
-                    reader = self._select_reader(reader_hint)
+                    upload_bytes = content.file_data.content if isinstance(content.file_data.content, bytes) else None
+                    if upload_bytes:
+                        real_ext = detect_real_extension(upload_bytes[:2048])
+                    else:
+                        real_ext = Path(content.file_data.filename).suffix.lower() if content.file_data.filename else ""
+                    reader, _ = self._select_reader_by_extension(real_ext)
                 # Use file_data.filename for reader (preserves extension for format detection)
                 reader_name = content.file_data.filename or content.name or f"content_{content.file_data.type}"
                 read_documents = reader.read(content_io, name=reader_name)
@@ -2602,7 +2644,7 @@ class Knowledge(RemoteKnowledge):
 
         if self.vector_db.upsert_available() and upsert:
             try:
-                await self.vector_db.async_upsert(content.content_hash, read_documents, content.metadata)  # type: ignore[arg-type]
+                await self.vector_db.async_upsert(content.content_hash, read_documents, _filters_from_metadata(content.metadata))  # type: ignore[arg-type]
             except Exception as e:
                 log_error(f"Error upserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
@@ -2614,7 +2656,7 @@ class Knowledge(RemoteKnowledge):
                 await self.vector_db.async_insert(
                     content.content_hash,  # type: ignore[arg-type]
                     documents=read_documents,
-                    filters=content.metadata,  # type: ignore[arg-type]
+                    filters=_filters_from_metadata(content.metadata),  # type: ignore[arg-type]
                 )
             except Exception as e:
                 log_error(f"Error inserting document: {e}", exc_info=True)
@@ -2648,7 +2690,7 @@ class Knowledge(RemoteKnowledge):
 
         if self.vector_db.upsert_available() and upsert:
             try:
-                self.vector_db.upsert(content.content_hash, read_documents, content.metadata)  # type: ignore[arg-type]
+                self.vector_db.upsert(content.content_hash, read_documents, _filters_from_metadata(content.metadata))  # type: ignore[arg-type]
             except Exception as e:
                 log_error(f"Error upserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
@@ -2660,7 +2702,7 @@ class Knowledge(RemoteKnowledge):
                 self.vector_db.insert(
                     content.content_hash,  # type: ignore[arg-type]
                     documents=read_documents,
-                    filters=content.metadata,  # type: ignore[arg-type]
+                    filters=_filters_from_metadata(content.metadata),  # type: ignore[arg-type]
                 )
             except Exception as e:
                 log_error(f"Error inserting document: {e}", exc_info=True)
@@ -3729,6 +3771,21 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
     # Local-path fields that must never appear in returned references
     _LOCAL_META_FIELDS = ("page_image_path", "pages_cache_dir", "pages_cache_url")
 
+    @staticmethod
+    def _swap_source_file_url(meta: Dict[str, Any]) -> None:
+        """Swap ``file_url`` and ``_source_file_url`` in metadata for frontend display.
+
+        When ``_source_file_url`` is present (the real file the user wants to expose),
+        its value replaces ``file_url`` so the frontend sees the correct download link.
+        The original ``file_url`` (the stored file) is preserved in ``_source_file_url``.
+        """
+        source_url = meta.get("_source_file_url")
+        if source_url:
+            original_file_url = meta.get("file_url")
+            if original_file_url is not None:
+                meta["file_url"] = source_url
+                meta["_source_file_url"] = original_file_url
+
     def _doc_to_reference_dict(self, doc: Document) -> Dict[str, Any]:
         """Build a reference dict from a retrieved Document suitable for returning to callers.
 
@@ -3759,6 +3816,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     except Exception as e:
                         log_warning(f"sign_url failed for {url_field}={url}: {e}")
 
+        # Swap _source_file_url with file_url for frontend display
+        self._swap_source_file_url(meta)
+
         return result
 
     async def _async_doc_to_reference_dict(self, doc: Document) -> Dict[str, Any]:
@@ -3785,6 +3845,9 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     except Exception as e:
                         log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
 
+        # Swap _source_file_url with file_url for frontend display
+        self._swap_source_file_url(meta)
+
         return result
 
     def _sign_reference_urls(self, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -3810,6 +3873,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                             meta[url_field] = self.page_image_storage.sign_url(url, expires=self.url_signature_expires)
                         except Exception as e:
                             log_warning(f"sign_url failed for {url_field}={url}: {e}")
+                self._swap_source_file_url(meta)
             signed.append(ref)
         return signed
 
@@ -3834,6 +3898,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                                 )
                         except Exception as e:
                             log_warning(f"async_sign_url failed for {url_field}={url}: {e}")
+                self._swap_source_file_url(meta)
             return ref
 
         return list(await asyncio.gather(*[_sign_one(ref) for ref in references]))

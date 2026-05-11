@@ -91,6 +91,7 @@ mistral = ["mistralai"]
 ollama = ["ollama"]
 openai = ["openai"]
 portkey = ["portkey-ai"]
+volcengine = ["volcengine-python-sdk[ark]"]
 
 # Dependencies for Token Counting
 tokenizers = ["tiktoken", "tokenizers"]

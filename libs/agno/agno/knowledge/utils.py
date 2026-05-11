@@ -1,15 +1,31 @@
 import json
 import os
+import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import urlparse, unquote
 
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.reader.reader_factory import ReaderFactory
 from agno.knowledge.types import ContentType
 from agno.utils.log import log_debug
+from agno.utils.media import get_image_type
 
 RESERVED_AGNO_KEY = "_ag_os"
+
+
+def multi_unquote(s: str, max_rounds: int = 10) -> str:
+    """
+    循环调用 unquote，直到字符串不再变化（或达到最大轮数）
+    """
+    prev = None
+    current = s
+    _round = 0
+    while current != prev and _round < max_rounds:
+        prev = current
+        current = unquote(current)
+        _round += 1
+    return current
 
 
 def format_image_meta(meta) -> str:
@@ -416,10 +432,7 @@ def get_content_type(file_path: str) -> str:
     """
     # First, try to detect from file content using python-magic
     try:
-        import magic
-
-        mime = magic.Magic(mime=True)
-        detected_type = mime.from_file(file_path)
+        detected_type = _get_magic().from_file(file_path)
         if detected_type:
             return detected_type
     except ImportError:
@@ -430,3 +443,210 @@ def get_content_type(file_path: str) -> str:
     # Fallback: detect from file extension
     ext = Path(file_path).suffix.lower()
     return CONTENT_TYPE_MAP.get(ext, "application/octet-stream")
+
+
+# Thread-local storage for python-magic — libmagic's magic_t handle is NOT
+# safe to share across threads, so each thread gets its own Magic instance.
+_magic_local = threading.local()
+
+
+def _get_magic():
+    """Return a thread-local ``magic.Magic(mime=True)`` instance."""
+    if not hasattr(_magic_local, "instance"):
+        import magic
+
+        _magic_local.instance = magic.Magic(mime=True)
+    return _magic_local.instance
+
+
+def get_content_type_from_bytes(data: bytes) -> str:
+    """Detect MIME content type from bytes using magic bytes.
+
+    Caller should pass only the first 32KB of file content.
+    Uses python-magic for accurate detection, falls back to heuristic checks.
+
+    Returns:
+        MIME type string, defaults to "application/octet-stream".
+    """
+    if not data:
+        return "application/octet-stream"
+
+    try:
+        detected_type = _get_magic().from_buffer(data)
+        if detected_type:
+            return detected_type
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    return _detect_mime_from_magic_bytes(data)
+
+
+def _detect_mime_from_magic_bytes(data: bytes) -> str:
+    """Detect MIME type from well-known magic byte signatures.
+
+    Covers common document, image, archive, and data formats used by the
+    knowledge pipeline.  Returns ``application/octet-stream`` when no known
+    signature matches.
+    """
+    if len(data) < 4:
+        return "application/octet-stream"
+
+    # PDF: %PDF
+    if data[:4] == b"%PDF":
+        return "application/pdf"
+
+    # ZIP-based formats (docx, xlsx, pptx, odt, etc.)
+    if data[:4] == b"PK\x03\x04":
+        lower = data[:2000].lower()
+        if b"content_types" in lower:
+            if b"word/" in lower:
+                return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            if b"spreadsheet/" in lower or b"xl/" in lower:
+                return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if b"presentation/" in lower or b"ppt/" in lower:
+                return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        return "application/zip"
+
+    # Images — reuse the shared magic-byte detector in utils/media.py
+    img_type = get_image_type(data)
+    if img_type:
+        return f"image/{img_type}"
+
+    # Audio/Video
+    if data[:3] == b"ID3" or data[:2] in (b"\xff\xfb", b"\xff\xf3"):
+        return "audio/mpeg"
+    if data[:4] == b"fLaC":
+        return "audio/flac"
+    # ftyp box: used by both HEIC/HEIF images and MP4/MOV video.
+    # Check common HEIC brand identifiers before defaulting to video/mp4.
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1"):
+            return "image/heic"
+        return "video/mp4"
+
+    # Text-based heuristics
+    if _looks_like_text(data[:8192]):
+        text_sample = data[:4096]
+        stripped = text_sample.lstrip()
+        if stripped.startswith(b"<?xml") or stripped.startswith(b"<"):
+            return "text/xml"
+        if stripped.startswith(b"{") or stripped.startswith(b"["):
+            return "application/json"
+        return "text/plain"
+
+    return "application/octet-stream"
+
+
+_TEXT_ALLOWED_CONTROL_BYTES: frozenset = frozenset({10, 13, 9})  # \n, \r, \t
+
+
+def _looks_like_text(data: bytes) -> bool:
+    """Check whether *data* appears to be valid UTF-8 text."""
+    try:
+        data.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return False
+    control_chars = sum(data.count(b) for b in range(32) if b not in _TEXT_ALLOWED_CONTROL_BYTES)
+    return control_chars < len(data) * 0.05
+
+
+# MIME→canonical-extension lookup derived from CONTENT_TYPE_MAP.
+# Used by detect_real_extension to map detected MIME back to an extension.
+_MIME_TO_PRIMARY_EXT: Dict[str, str] = {}
+for _ext, _mime in CONTENT_TYPE_MAP.items():
+    if _mime not in _MIME_TO_PRIMARY_EXT:
+        _MIME_TO_PRIMARY_EXT[_mime] = _ext
+
+
+def detect_real_extension(data: bytes) -> str:
+    """Detect real file extension from content bytes.
+
+    Caller should pass at most the first 32KB of file content.
+    Returns extension like ``".pdf"`` or empty string when detection fails.
+    """
+    if not data:
+        return ""
+    mime = get_content_type_from_bytes(data)
+    return _MIME_TO_PRIMARY_EXT.get(mime, "")
+
+
+def detect_real_extension_from_file(path: Union[str, Path]) -> str:
+    """Detect real file extension by reading the first 2KB of a file."""
+    with open(path, "rb") as f:
+        return detect_real_extension(f.read(2048))
+
+
+# Mapping from MIME type to ALL compatible file extensions.
+# This is broader than the canonical mapping because magic bytes detect
+# many formats as "text/plain" (e.g. .md, .csv, .json are all text/plain at
+# the byte level even though they have distinct MIME types in CONTENT_TYPE_MAP).
+# Used by validate_file_type_match for extension/content compatibility checks.
+_MIME_TO_EXTENSIONS: Dict[str, set] = {
+    "application/pdf": {".pdf"},
+    "application/zip": {".zip"},
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": {".docx"},
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {".xlsx"},
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": {".pptx"},
+    "application/vnd.ms-excel": {".xls"},
+    "application/msword": {".doc"},
+    "image/png": {".png"},
+    "image/jpeg": {".jpg", ".jpeg"},
+    "image/gif": {".gif"},
+    "image/webp": {".webp"},
+    "image/heic": {".heic", ".heif"},
+    "text/plain": {
+        ".txt",
+        ".md",
+        ".markdown",
+        ".csv",
+        ".json",
+        ".xml",
+        ".yaml",
+        ".yml",
+        ".html",
+        ".htm",
+        ".css",
+        ".js",
+        ".py",
+        ".ts",
+        ".log",
+    },
+    "text/csv": {".csv"},
+    "text/markdown": {".md", ".markdown"},
+    "text/html": {".html", ".htm"},
+    "application/json": {".json"},
+    "application/xml": {".xml"},
+    "text/xml": {".xml"},
+    "audio/mpeg": {".mp3"},
+    "video/mp4": {".mp4"},
+}
+
+
+def validate_file_type_match(
+    detected_mime: str,
+    claimed_extension: str,
+) -> bool:
+    """Check whether a detected MIME type is compatible with the claimed file extension.
+
+    Guards against spoofed extensions (e.g. ``malware.exe`` renamed to ``report.pdf``).
+
+    Returns True when compatible or undetermined; False only on clear mismatch.
+    """
+    if not detected_mime or not claimed_extension:
+        return True
+
+    claimed_extension = claimed_extension.lower()
+    if not claimed_extension.startswith("."):
+        claimed_extension = "." + claimed_extension
+
+    if detected_mime == "application/octet-stream":
+        return True
+
+    compatible_exts = _MIME_TO_EXTENSIONS.get(detected_mime)
+    if compatible_exts is None:
+        return True
+
+    return claimed_extension in compatible_exts
