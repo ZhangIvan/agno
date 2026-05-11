@@ -650,3 +650,13 @@ def validate_file_type_match(
         return True
 
     return claimed_extension in compatible_exts
+
+
+_INTERNAL_FILTER_FIELDS = frozenset({"_source_file_url"})
+
+
+def _filters_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return a copy of metadata with internal fields stripped for use as vector_db filters."""
+    if not metadata:
+        return metadata
+    return {k: v for k, v in metadata.items() if k not in _INTERNAL_FILTER_FIELDS}

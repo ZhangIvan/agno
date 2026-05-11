@@ -34,6 +34,7 @@ from agno.knowledge.utils import (
     set_agno_metadata,
     strip_agno_metadata,
     multi_unquote,
+    _filters_from_metadata,
 )
 from agno.utils.http import async_fetch_with_retry
 from agno.utils.log import log_debug, log_error, log_info, log_warning
@@ -59,16 +60,6 @@ def _extract_name_from_url(url: str) -> Optional[str]:
         return multi_unquote(filename) or None
     except Exception:
         return None
-
-
-_INTERNAL_FILTER_FIELDS = frozenset({"_source_file_url"})
-
-
-def _filters_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Return a copy of metadata with internal fields stripped for use as vector_db filters."""
-    if not metadata:
-        return metadata
-    return {k: v for k, v in metadata.items() if k not in _INTERNAL_FILTER_FIELDS}
 
 
 class KnowledgeContentOrigin(Enum):

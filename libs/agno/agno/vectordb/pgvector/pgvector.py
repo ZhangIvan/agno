@@ -3,6 +3,7 @@ from hashlib import md5
 from math import sqrt
 from typing import Any, Dict, List, Optional, Union, cast
 
+from agno.knowledge.utils import _filters_from_metadata
 from agno.utils.string import generate_id
 
 try:
@@ -793,7 +794,7 @@ class PgVector(VectorDb):
                         filters=bindparam("ft", type_=postgresql.JSONB),
                     )
                 )
-                sess.execute(stmt, {"md": metadata, "ft": metadata})
+                sess.execute(stmt, {"md": metadata, "ft": _filters_from_metadata(metadata)})
                 sess.commit()
         except Exception as e:
             log_error(f"Error updating metadata for document {content_id}: {str(e)}")
