@@ -4,6 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from agno.exceptions import ModelAuthenticationError
+from agno.models.message import Message
 from agno.models.volcengine import VolcengineResponses
 
 
@@ -12,7 +13,7 @@ def test_volcengine_responses_initialization_with_api_key():
     assert model.id == "doubao-pro-32k"
     assert model.api_key == "test-api-key"
     assert model.base_url == "https://ark.cn-beijing.volces.com/api/v3"
-    assert model.store is False
+    assert model.store is True
 
 
 def test_volcengine_responses_initialization_without_api_key():
@@ -48,12 +49,12 @@ def test_volcengine_responses_default_values():
     assert model.id == "doubao-pro-32k"
     assert model.name == "VolcengineResponses"
     assert model.provider == "Volcengine"
-    assert model.store is False
+    assert model.store is True
 
 
-def test_volcengine_responses_no_reasoning_model():
+def test_volcengine_responses_uses_stateful_responses():
     model = VolcengineResponses(api_key="key")
-    assert model._using_reasoning_model() is False
+    assert model._using_reasoning_model() is True
 
 
 # ============================================================
@@ -150,3 +151,91 @@ def test_responses_encryption_disabled_by_default():
     params = model.get_request_params()
     headers = params.get("extra_headers", {})
     assert "x-is-encrypted" not in headers
+
+
+# ============================================================
+# Caching
+# ============================================================
+
+
+def test_responses_caching_in_extra_body():
+    model = VolcengineResponses(api_key="key", caching={"type": "enabled"})
+    params = model.get_request_params()
+    assert params["extra_body"]["caching"] == {"type": "enabled"}
+
+
+def test_responses_caching_default_none():
+    model = VolcengineResponses(api_key="key")
+    params = model.get_request_params()
+    assert "extra_body" not in params or params.get("extra_body") is None
+
+
+def test_responses_caching_with_existing_extra_body():
+    model = VolcengineResponses(api_key="key", caching={"type": "enabled"}, extra_body={"custom_key": "value"})
+    params = model.get_request_params()
+    assert params["extra_body"]["caching"] == {"type": "enabled"}
+    assert params["extra_body"]["custom_key"] == "value"
+
+
+def test_responses_caching_does_not_overwrite_extra_body_caching():
+    model = VolcengineResponses(
+        api_key="key",
+        caching={"type": "enabled"},
+        extra_body={"caching": {"type": "disabled"}},
+    )
+    params = model.get_request_params()
+    assert params["extra_body"]["caching"] == {"type": "disabled"}
+
+
+# ============================================================
+# previous_response_id chaining
+# ============================================================
+
+
+def test_responses_previous_response_id_from_messages():
+    model = VolcengineResponses(api_key="key")
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="hello", provider_data={"response_id": "resp-001"}),
+        Message(role="user", content="how are you?"),
+    ]
+    params = model.get_request_params(messages=messages)
+    assert params.get("store") is True
+    assert params.get("previous_response_id") == "resp-001"
+
+
+def test_responses_no_previous_response_id_without_history():
+    model = VolcengineResponses(api_key="key")
+    messages = [Message(role="user", content="first message")]
+    params = model.get_request_params(messages=messages)
+    assert params.get("store") is True
+    assert "previous_response_id" not in params
+
+
+def test_responses_store_can_be_disabled():
+    model = VolcengineResponses(api_key="key", store=False)
+    messages = [
+        Message(role="user", content="hi"),
+        Message(role="assistant", content="hello", provider_data={"response_id": "resp-001"}),
+        Message(role="user", content="how are you?"),
+    ]
+    params = model.get_request_params(messages=messages)
+    assert params.get("store") is False
+    assert "previous_response_id" not in params
+
+
+# ============================================================
+# No OpenAI-specific parameter leakage
+# ============================================================
+
+
+def test_responses_no_reasoning_param_leak():
+    model = VolcengineResponses(api_key="key")
+    params = model.get_request_params()
+    assert "reasoning" not in params
+
+
+def test_responses_no_reasoning_param_leak_with_store_false():
+    model = VolcengineResponses(api_key="key", store=False)
+    params = model.get_request_params()
+    assert "reasoning" not in params

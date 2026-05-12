@@ -77,6 +77,7 @@ def test_ark_default_values():
     assert model.thinking is None
     assert model.reasoning_effort is None
     assert model.repetition_penalty is None
+    assert model.caching is None
     assert model.region is None
     assert model.web_search is False
     assert model.image_process is False
@@ -402,3 +403,48 @@ def test_ark_encryption_with_web_search():
     params = model.get_request_params()
     assert params["extra_headers"]["x-is-encrypted"] == "true"
     assert params["extra_headers"]["ark-beta-web-search"] == "true"
+
+
+# ============================================================
+# Caching
+# ============================================================
+
+
+def test_ark_caching_in_extra_body():
+    model = Ark(api_key="key", caching={"type": "enabled"})
+    params = model.get_request_params()
+    assert params["extra_body"]["caching"] == {"type": "enabled"}
+
+
+def test_ark_caching_default_none():
+    model = Ark(api_key="key")
+    params = model.get_request_params()
+    assert "extra_body" not in params or params.get("extra_body") is None
+
+
+def test_ark_caching_with_existing_extra_body():
+    model = Ark(api_key="key", caching={"type": "enabled"}, extra_body={"custom_key": "value"})
+    params = model.get_request_params()
+    assert params["extra_body"]["caching"] == {"type": "enabled"}
+    assert params["extra_body"]["custom_key"] == "value"
+
+
+def test_ark_caching_does_not_overwrite_extra_body_caching():
+    model = Ark(
+        api_key="key",
+        caching={"type": "enabled"},
+        extra_body={"caching": {"type": "disabled"}},
+    )
+    params = model.get_request_params()
+    assert params["extra_body"]["caching"] == {"type": "disabled"}
+
+
+def test_ark_caching_with_thinking():
+    model = Ark(
+        api_key="key",
+        caching={"type": "enabled"},
+        thinking={"type": "enabled", "budget_tokens": 1024},
+    )
+    params = model.get_request_params()
+    assert params["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert params["extra_body"]["caching"] == {"type": "enabled"}

@@ -35,6 +35,11 @@ class Ark(OpenAILike):
       * API key  — set ``ARK_API_KEY`` (or ``DOUBAO_API_KEY``) or pass ``api_key=``.
       * AK / SK  — set ``VOLC_ACCESSKEY`` / ``VOLC_SECRETKEY`` or pass ``ak=`` / ``sk=``.
 
+    Context caching:
+      * ``caching`` — pass ``{"type": "enabled"}`` to enable Volcengine context
+        caching via ``extra_body``.  Note: the Chat Completions API may not
+        support this parameter; prefer ``VolcengineResponses`` for caching.
+
     Example::
 
         from agno.models.volcengine import Ark
@@ -63,6 +68,7 @@ class Ark(OpenAILike):
     thinking: Optional[Dict[str, Any]] = None
     reasoning_effort: Optional[str] = None
     repetition_penalty: Optional[float] = None
+    caching: Optional[Dict[str, Any]] = None
 
     # Volcengine built-in tools (Chat & Responses API)
     web_search: bool = False
@@ -171,6 +177,11 @@ class Ark(OpenAILike):
             headers = params.get("extra_headers") or {}
             headers["x-is-encrypted"] = "true"
             params["extra_headers"] = headers
+
+        if self.caching is not None:
+            body = params.get("extra_body") or {}
+            body.setdefault("caching", self.caching)
+            params["extra_body"] = body
 
         params = inject_builtin_tools(
             params,
