@@ -19,20 +19,31 @@ class VolcengineResponses(OpenResponses):
     Completions — it uses structured input/output blocks, supports server-side
     state via ``previous_response_id``, and offers background polling.
 
-    Authentication (pick one):
+    Authentication:
       * API key  — ``ARK_API_KEY`` (or ``DOUBAO_API_KEY``) or ``api_key=``.
-      * AK / SK  — ``VOLC_ACCESSKEY`` / ``VOLC_SECRETKEY`` (via ``ak=`` / ``sk=``).
 
-    Note: AK/SK auth is handled at the Volcengine SDK level and is **not**
-    directly compatible with the standard ``openai`` client used by
-    ``OpenResponses``.  If you need AK/SK auth, use the ``Ark`` (Chat
-    Completions) model instead.  This class requires an API key.
+    Note: AK/SK auth requires the ``volcenginesdkarkruntime`` SDK and is **not**
+    compatible with the standard ``openai`` client used by this class.  If you
+    need AK/SK auth, use the ``Ark`` (Chat Completions) model instead.
+
+    Server-side state (``store=True`` by default):
+      Responses are stored server-side and subsequent requests within the same
+      session automatically carry ``previous_response_id`` so the API reuses
+      cached context instead of re-processing full history.  Set ``store=False``
+      to disable this behavior (all history sent on every request).
+
+    Context caching:
+      * ``caching`` — pass ``{"type": "enabled"}`` to enable Volcengine context
+        caching via ``extra_body``.
 
     Built-in tools (Responses API only):
       * ``web_search`` — enable web search via ``web_search=True``.
       * ``image_process`` — enable image processing via ``image_process=True``.
       * ``knowledge_search`` — pass config dict with ``knowledge_resource_id``.
       * ``mcp_servers`` — list of MCP server config dicts.
+
+    Note: Inherited ``reasoning``, ``reasoning_effort``, and ``reasoning_summary``
+    fields are OpenAI-specific and have no effect on Volcengine models.
 
     Example::
 
@@ -51,14 +62,32 @@ class VolcengineResponses(OpenResponses):
     # passed through but client-side encrypt/decrypt is handled server-side)
     enable_encryption: bool = False
 
-    # Volcengine Responses API is stateless (no previous_response_id support)
-    store: Optional[bool] = False
+    # Enable server-side state — allows previous_response_id chaining so the
+    # API can reuse cached context instead of re-processing full history.
+    store: Optional[bool] = True
 
     # Volcengine built-in tools (Responses API only)
     web_search: bool = False
     image_process: bool = False
     knowledge_search: Optional[Dict[str, Any]] = None
     mcp_servers: Optional[List[Dict[str, Any]]] = None
+
+    # Volcengine-specific request parameters (pass-through)
+    caching: Optional[Dict[str, Any]] = None
+
+    def _using_reasoning_model(self) -> bool:
+        """Enable previous_response_id chaining for all Volcengine models.
+
+        The Responses API's ``previous_response_id`` mechanism works for any
+        model, not just reasoning models.  Returning ``True`` here activates
+        the ``store=True`` + ``previous_response_id`` logic inherited from
+        ``OpenAIResponses``.
+        """
+        return True
+
+    def _set_reasoning_request_param(self, base_params: Dict[str, Any]) -> Dict[str, Any]:
+        """Volcengine does not use the OpenAI ``reasoning`` parameter — skip it."""
+        return base_params
 
     def _get_client_params(self) -> Dict[str, Any]:
         if not self.api_key:
@@ -100,6 +129,11 @@ class VolcengineResponses(OpenResponses):
             headers = params.get("extra_headers") or {}
             headers["x-is-encrypted"] = "true"
             params["extra_headers"] = headers
+
+        if self.caching is not None:
+            body = params.get("extra_body") or {}
+            body.setdefault("caching", self.caching)
+            params["extra_body"] = body
 
         params = inject_builtin_tools(
             params,
