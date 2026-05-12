@@ -203,7 +203,11 @@ class Ark(OpenAILike):
         if response_message.role is not None:
             model_response.role = response_message.role
 
-        if response_message.content is not None:
+        if hasattr(response_message, "reasoning_content") and response_message.reasoning_content is not None:
+            model_response.reasoning_content = response_message.reasoning_content
+            if response_message.content is not None:
+                model_response.content = response_message.content
+        elif response_message.content is not None:
             model_response.content = response_message.content
             if model_response.content:
                 from agno.utils.reasoning import extract_thinking_content
@@ -218,9 +222,6 @@ class Ark(OpenAILike):
                 model_response.tool_calls = [t.model_dump() for t in response_message.tool_calls]
             except Exception as e:
                 log_warning(f"Error processing tool calls: {str(e)}")
-
-        if hasattr(response_message, "reasoning_content") and response_message.reasoning_content is not None:
-            model_response.reasoning_content = response_message.reasoning_content
 
         if response.usage is not None:
             model_response.response_usage = self._get_metrics(response.usage)

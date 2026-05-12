@@ -549,7 +549,7 @@ def _looks_like_text(data: bytes) -> bool:
         data.decode("utf-8")
     except (UnicodeDecodeError, ValueError):
         return False
-    control_chars = sum(data.count(b) for b in range(32) if b not in _TEXT_ALLOWED_CONTROL_BYTES)
+    control_chars = sum(1 for byte in data if byte < 32 and byte not in _TEXT_ALLOWED_CONTROL_BYTES)
     return control_chars < len(data) * 0.05
 
 

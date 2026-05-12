@@ -6,7 +6,6 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from io import BytesIO
-from os.path import basename
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
 from urllib.parse import urlparse, unquote
@@ -1702,7 +1701,7 @@ class Knowledge(RemoteKnowledge):
                         file_extension = real_ext
                 reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
                 if default_name and file_extension == ".csv":
-                    name = basename(parsed_url.path) or default_name
+                    name = _extract_name_from_url(content.url) or default_name
             else:
                 reader = content.reader or self.website_reader
             # 5. Read content
@@ -1901,7 +1900,7 @@ class Knowledge(RemoteKnowledge):
                         file_extension = real_ext
                 reader, default_name = self._select_reader_by_extension(file_extension, content.reader)
                 if default_name and file_extension == ".csv":
-                    name = basename(parsed_url.path) or default_name
+                    name = _extract_name_from_url(content.url) or default_name
             else:
                 reader = content.reader or self.website_reader
 

@@ -110,6 +110,3 @@ class VolcengineResponses(OpenResponses):
         )
 
         return params
-
-    def _using_reasoning_model(self) -> bool:
-        return False
