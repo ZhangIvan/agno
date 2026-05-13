@@ -112,9 +112,11 @@ def create_knowledge_search_tool(
 ) -> Function:
     """Create a unified search_knowledge_base tool.
 
+    Accepts a list of queries so the LLM can batch multiple searches into one
+    tool call. Results are merged and deduplicated automatically.
+
     Routes all knowledge searches through get_relevant_docs_from_knowledge(),
     which checks knowledge_retriever first and falls back to knowledge.search().
-    This ensures the custom retriever is always respected when provided.
     """
 
     def _format_results(docs: Optional[List[Union[Dict[str, Any], str]]]) -> str:
@@ -131,10 +133,58 @@ def create_knowledge_search_tool(
 
             return yaml.dump(output_docs, default_flow_style=False)
 
-    def _track_references(docs: Optional[List[Union[Dict[str, Any], str]]], query: str, elapsed: float) -> None:
+    # Per-run bounded dedup — prevents context bloat from repeated docs across calls
+    _MAX_DOC_HASHES = 200
+    _seen_doc_hashes: set = set()
+
+    def _hash_doc(doc: Union[Dict[str, Any], str]) -> str:
+        import hashlib
+
+        content = ""
+        if isinstance(doc, dict):
+            content = doc.get("content", "") or doc.get("text", "") or ""
+        else:
+            content = str(doc)
+        return hashlib.md5(content.encode()).hexdigest()
+
+    def _dedup_docs(docs: Optional[List[Union[Dict[str, Any], str]]]) -> Optional[List[Union[Dict[str, Any], str]]]:
+        if not docs:
+            return docs
+        unique = []
+        for doc in docs:
+            h = _hash_doc(doc)
+            if h not in _seen_doc_hashes:
+                if len(_seen_doc_hashes) < _MAX_DOC_HASHES:
+                    _seen_doc_hashes.add(h)
+                unique.append(doc)
+        return unique if unique else None
+
+    def _dedup_raw_docs(
+        all_raw_docs: list, to_ref: Any
+    ) -> tuple:
+        """Dedup raw Document objects using content hashing.
+
+        Returns (unique_raw_docs, ref_dicts_or_None).
+        """
+        unique_raw_docs = []
+        ref_dicts = None
+        if all_raw_docs:
+            for doc in all_raw_docs:
+                ref = to_ref(doc) if callable(to_ref) else doc.to_dict()
+                h = _hash_doc(ref)
+                if h not in _seen_doc_hashes:
+                    if len(_seen_doc_hashes) < _MAX_DOC_HASHES:
+                        _seen_doc_hashes.add(h)
+                    unique_raw_docs.append(doc)
+                    if ref_dicts is None:
+                        ref_dicts = []
+                    ref_dicts.append(ref)
+        return unique_raw_docs, ref_dicts
+
+    def _track_references(docs: Optional[List[Union[Dict[str, Any], str]]], queries_label: str, elapsed: float) -> None:
         if run_response is not None and docs:
             references = MessageReferences(
-                query=query,
+                query=queries_label,
                 references=docs,
                 time=round(elapsed, 4),
             )
@@ -157,67 +207,97 @@ def create_knowledge_search_tool(
 
     if enable_agentic_filters:
 
-        def search_knowledge_base_with_filters(query: str, filters: Optional[List[KnowledgeFilter]] = None) -> str:
-            """Use this function to search the knowledge base for information about a query.
+        def search_knowledge_base_with_filters(
+            queries: List[str], filters: Optional[List[KnowledgeFilter]] = None
+        ) -> str:
+            """Use this function to search the knowledge base for information.
+            Accepts one or more queries — results are combined and deduplicated automatically.
 
             Args:
-                query: The query to search for.
+                queries: One or more search queries to look up in the knowledge base.
                 filters (optional): The filters to apply to the search. This is a list of KnowledgeFilter objects.
 
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            resolved_filters = _resolve_filters(filters)
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
                 from agno.agent import _messages
 
-                docs = _messages.get_relevant_docs_from_knowledge(
-                    agent,
-                    query=query,
-                    filters=_resolve_filters(filters),
-                    validate_filters=True,
-                    run_context=run_context,
-                )
+                all_docs: List[Union[Dict[str, Any], str]] = []
+                for q in queries:
+                    try:
+                        docs = _messages.get_relevant_docs_from_knowledge(
+                            agent,
+                            query=q,
+                            filters=resolved_filters,
+                            validate_filters=True,
+                            run_context=run_context,
+                        )
+                        if docs:
+                            all_docs.extend(docs)
+                    except Exception as e:
+                        log_warning(f"Knowledge search failed for '{q}': {str(e)}")
             except Exception as e:
                 log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
-            _track_references(docs, query, retrieval_timer.elapsed)
+
             retrieval_timer.stop()
+            all_docs = _dedup_docs(all_docs) if all_docs else None
+            _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
             log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-            return _format_results(docs)
+            return _format_results(all_docs)
 
         async def asearch_knowledge_base_with_filters(
-            query: str, filters: Optional[List[KnowledgeFilter]] = None
+            queries: List[str], filters: Optional[List[KnowledgeFilter]] = None
         ) -> str:
-            """Use this function to search the knowledge base for information about a query.
+            """Use this function to search the knowledge base for information.
+            Accepts one or more queries — results are combined and deduplicated automatically.
 
             Args:
-                query: The query to search for.
+                queries: One or more search queries to look up in the knowledge base.
                 filters (optional): The filters to apply to the search. This is a list of KnowledgeFilter objects.
 
             Returns:
                 str: A string containing the response from the knowledge base.
             """
+            import asyncio
+
+            resolved_filters = _resolve_filters(filters)
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
                 from agno.agent import _messages
 
-                docs = await _messages.aget_relevant_docs_from_knowledge(
-                    agent,
-                    query=query,
-                    filters=_resolve_filters(filters),
-                    validate_filters=True,
-                    run_context=run_context,
-                )
+                async def _search_one(q: str):
+                    try:
+                        return await _messages.aget_relevant_docs_from_knowledge(
+                            agent,
+                            query=q,
+                            filters=resolved_filters,
+                            validate_filters=True,
+                            run_context=run_context,
+                        )
+                    except Exception as e:
+                        log_warning(f"Knowledge search failed for '{q}': {str(e)}")
+                        return None
+
+                all_doc_lists = await asyncio.gather(*[_search_one(q) for q in queries])
+                all_docs: List[Union[Dict[str, Any], str]] = []
+                for docs in all_doc_lists:
+                    if docs:
+                        all_docs.extend(docs)
             except Exception as e:
                 log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
-            _track_references(docs, query, retrieval_timer.elapsed)
+
             retrieval_timer.stop()
+            all_docs = _dedup_docs(all_docs) if all_docs else None
+            _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
             log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-            return _format_results(docs)
+            return _format_results(all_docs)
 
         if async_mode:
             return Function.from_callable(asearch_knowledge_base_with_filters, name="search_knowledge_base")
@@ -225,14 +305,14 @@ def create_knowledge_search_tool(
 
     else:
 
-        def search_knowledge_base(query: str) -> str:
-            """Use this function to search the knowledge base for information about a query.
-
+        def search_knowledge_base(queries: List[str]) -> str:
+            """Use this function to search the knowledge base for information.
+            Accepts one or more queries — results are combined and deduplicated automatically.
             The results may include text content and/or images of document pages.
             When images are returned, read them to extract the relevant information.
 
             Args:
-                query: The query to search for.
+                queries: One or more search queries to look up in the knowledge base.
 
             Returns:
                 str: A string containing the response from the knowledge base, may include images.
@@ -242,95 +322,142 @@ def create_knowledge_search_tool(
             try:
                 from agno.agent import _messages
 
-                # When use_page_images is enabled, retrieve Document objects directly
-                # so we can attach page images to the tool result for the LLM
                 resolved_knowledge = _messages._get_resolved_knowledge(agent, run_context)
-                if (
+                use_page_images = (
                     resolved_knowledge is not None
                     and getattr(resolved_knowledge, "use_page_images", False)
                     and agent.knowledge_retriever is None
-                ):
-                    raw_docs = resolved_knowledge.search(query=query, filters=knowledge_filters)
+                )
+
+                if use_page_images:
+                    all_raw_docs = []
+                    for q in queries:
+                        try:
+                            raw_docs = resolved_knowledge.search(query=q, filters=knowledge_filters)
+                            if raw_docs:
+                                all_raw_docs.extend(raw_docs)
+                        except Exception as e:
+                            log_warning(f"Knowledge search failed for '{q}': {str(e)}")
+
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
-                    if raw_docs:
-                        ref_dicts = (
-                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
-                        )
-                        _track_references(ref_dicts, query, retrieval_timer.elapsed)
-                        images = resolved_knowledge._get_page_images_for_docs(raw_docs)
+                    unique_raw_docs, ref_dicts = _dedup_raw_docs(all_raw_docs, _to_ref)
+                    _track_references(ref_dicts, ", ".join(queries), retrieval_timer.elapsed)
+                    if ref_dicts:
+                        images = resolved_knowledge._get_page_images_for_docs(unique_raw_docs)
                         if images:
                             result = build_page_image_tool_result(images)
                             if result:
                                 return result
-                    return _format_results(ref_dicts if raw_docs else None)
+                    return _format_results(ref_dicts)
 
-                docs = _messages.get_relevant_docs_from_knowledge(
-                    agent,
-                    query=query,
-                    filters=knowledge_filters,
-                    run_context=run_context,
-                )
+                else:
+                    all_docs: List[Union[Dict[str, Any], str]] = []
+                    for q in queries:
+                        try:
+                            docs = _messages.get_relevant_docs_from_knowledge(
+                                agent,
+                                query=q,
+                                filters=knowledge_filters,
+                                run_context=run_context,
+                            )
+                            if docs:
+                                all_docs.extend(docs)
+                        except Exception as e:
+                            log_warning(f"Knowledge search failed for '{q}': {str(e)}")
+
+                    retrieval_timer.stop()
+                    all_docs = _dedup_docs(all_docs) if all_docs else None
+                    _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
+                    log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
+                    return _format_results(all_docs)
+
             except Exception as e:
                 log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
-            _track_references(docs, query, retrieval_timer.elapsed)
-            retrieval_timer.stop()
-            log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-            return _format_results(docs)
 
-        async def asearch_knowledge_base(query: str) -> str:
-            """Use this function to search the knowledge base for information about a query.
-
+        async def asearch_knowledge_base(queries: List[str]) -> str:
+            """Use this function to search the knowledge base for information.
+            Accepts one or more queries — results are combined and deduplicated automatically.
             The results may include text content and/or images of document pages.
             When images are returned, read them to extract the relevant information.
 
             Args:
-                query: The query to search for.
+                queries: One or more search queries to look up in the knowledge base.
 
             Returns:
                 str: A string containing the response from the knowledge base, may include images.
             """
+            import asyncio
+
             retrieval_timer = Timer()
             retrieval_timer.start()
             try:
                 from agno.agent import _messages
 
-                # When use_page_images is enabled, retrieve Document objects directly
                 resolved_knowledge = _messages._get_resolved_knowledge(agent, run_context)
-                if (
+                use_page_images = (
                     resolved_knowledge is not None
                     and getattr(resolved_knowledge, "use_page_images", False)
                     and agent.knowledge_retriever is None
-                ):
-                    raw_docs = await resolved_knowledge.asearch(query=query, filters=knowledge_filters)
+                )
+
+                if use_page_images:
+
+                    async def _asearch_one(q: str):
+                        try:
+                            return await resolved_knowledge.asearch(query=q, filters=knowledge_filters)
+                        except Exception as e:
+                            log_warning(f"Knowledge search failed for '{q}': {str(e)}")
+                            return None
+
+                    raw_doc_lists = await asyncio.gather(*[_asearch_one(q) for q in queries])
+                    all_raw_docs = []
+                    for raw_docs in raw_doc_lists:
+                        if raw_docs:
+                            all_raw_docs.extend(raw_docs)
+
                     retrieval_timer.stop()
                     _to_ref = getattr(resolved_knowledge, "_doc_to_reference_dict", None)
-                    if raw_docs:
-                        ref_dicts = (
-                            [_to_ref(d) for d in raw_docs] if callable(_to_ref) else [d.to_dict() for d in raw_docs]
-                        )
-                        _track_references(ref_dicts, query, retrieval_timer.elapsed)
-                        images = resolved_knowledge._get_page_images_for_docs(raw_docs)
+                    unique_raw_docs, ref_dicts = _dedup_raw_docs(all_raw_docs, _to_ref)
+                    _track_references(ref_dicts, ", ".join(queries), retrieval_timer.elapsed)
+                    if ref_dicts:
+                        images = resolved_knowledge._get_page_images_for_docs(unique_raw_docs)
                         if images:
                             result = build_page_image_tool_result(images)
                             if result:
                                 return result
-                    return _format_results(ref_dicts if raw_docs else None)
+                    return _format_results(ref_dicts)
 
-                docs = await _messages.aget_relevant_docs_from_knowledge(
-                    agent,
-                    query=query,
-                    filters=knowledge_filters,
-                    run_context=run_context,
-                )
+                else:
+
+                    async def _search_one(q: str):
+                        try:
+                            return await _messages.aget_relevant_docs_from_knowledge(
+                                agent,
+                                query=q,
+                                filters=knowledge_filters,
+                                run_context=run_context,
+                            )
+                        except Exception as e:
+                            log_warning(f"Knowledge search failed for '{q}': {str(e)}")
+                            return None
+
+                    all_doc_lists = await asyncio.gather(*[_search_one(q) for q in queries])
+                    all_docs: List[Union[Dict[str, Any], str]] = []
+                    for docs in all_doc_lists:
+                        if docs:
+                            all_docs.extend(docs)
+
+                    retrieval_timer.stop()
+                    all_docs = _dedup_docs(all_docs) if all_docs else None
+                    _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
+                    log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
+                    return _format_results(all_docs)
+
             except Exception as e:
                 log_warning(f"Knowledge search failed: {str(e)}")
                 return f"Error searching knowledge base: {type(e).__name__}"
-            _track_references(docs, query, retrieval_timer.elapsed)
-            retrieval_timer.stop()
-            log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-            return _format_results(docs)
 
         if async_mode:
             return Function.from_callable(asearch_knowledge_base, name="search_knowledge_base")

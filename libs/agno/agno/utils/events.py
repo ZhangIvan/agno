@@ -664,7 +664,6 @@ def create_run_output_content_event(
         citations=citations,
         response_audio=response_audio,
         image=image,
-        references=from_run_response.references,
         additional_input=from_run_response.additional_input,
         reasoning_steps=from_run_response.reasoning_steps,
         reasoning_messages=from_run_response.reasoning_messages,
@@ -697,7 +696,6 @@ def create_team_run_output_content_event(
         model_provider_data=model_provider_data,
         response_audio=response_audio,
         image=image,
-        references=from_run_response.references,  # type: ignore
         additional_input=from_run_response.additional_input,  # type: ignore
         reasoning_steps=from_run_response.reasoning_steps,  # type: ignore
         reasoning_messages=from_run_response.reasoning_messages,  # type: ignore
