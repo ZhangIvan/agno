@@ -1,3 +1,5 @@
+import json
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Union
 
 from agno.media import Audio, Image
@@ -560,13 +562,114 @@ def create_team_reasoning_completed_event(
     )
 
 
+def _format_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.1f} MB"
+
+
+_MAX_JSON_PARSE_SIZE = 50_000  # Skip JSON parse for results larger than this
+_KNOWLEDGE_RESULT_THRESHOLD = 500  # Below this, knowledge search results are sent as-is
+_GENERIC_RESULT_THRESHOLD = 1000  # Below this, generic tool results are sent as-is
+_TOOL_RESULT_THRESHOLD = 500  # Below this, tool events skip truncation entirely
+
+
+def _truncate_strings(v, max_str: int = 200, max_depth: int = 10, _depth: int = 0):
+    """Recursively truncate long strings in nested JSON, preserving structure."""
+    if _depth > max_depth:
+        return "..."
+    if isinstance(v, str):
+        return v[:max_str] + "..." if len(v) > max_str else v
+    if isinstance(v, list):
+        return [_truncate_strings(item, max_str, max_depth, _depth + 1) for item in v]
+    if isinstance(v, dict):
+        return {k: _truncate_strings(val, max_str, max_depth, _depth + 1) for k, val in v.items()}
+    return v
+
+
+def _make_summary(size_str: str, item_count: Optional[int] = None) -> str:
+    """Build a valid JSON summary object for truncated results."""
+    summary: Dict[str, Any] = {"_truncated": True, "original_size": size_str}
+    if item_count is not None:
+        summary["total_items"] = item_count
+    return json.dumps(summary, ensure_ascii=False)
+
+
+def _summarize_result(result: str) -> str:
+    """Replace result with a lightweight JSON summary (for knowledge search whose full data is in references)."""
+    original_size = len(result)
+    if original_size <= _KNOWLEDGE_RESULT_THRESHOLD:
+        return result
+
+    size_str = _format_size(original_size)
+
+    if original_size > _MAX_JSON_PARSE_SIZE:
+        return _make_summary(size_str)
+
+    try:
+        parsed = json.loads(result)
+    except (json.JSONDecodeError, ValueError):
+        return _make_summary(size_str)
+
+    if isinstance(parsed, list):
+        return _make_summary(size_str, item_count=len(parsed))
+    return _make_summary(size_str)
+
+
+def _truncate_generic_result(result: str, max_str: int = 200, max_items: int = 5) -> str:
+    """Truncate a generic tool result, preserving JSON structure with shortened string values."""
+    original_size = len(result)
+    if original_size <= _GENERIC_RESULT_THRESHOLD:
+        return result
+
+    size_str = _format_size(original_size)
+
+    if original_size > _MAX_JSON_PARSE_SIZE:
+        return _make_summary(size_str)
+
+    try:
+        parsed = json.loads(result)
+    except (json.JSONDecodeError, ValueError):
+        return _make_summary(size_str)
+
+    if isinstance(parsed, list):
+        head = parsed[:max_items]
+        truncated = _truncate_strings(head, max_str)
+        if len(parsed) > max_items:
+            summary = {"_truncated": True, "shown_items": max_items, "total_items": len(parsed), "original_size": size_str}
+            return json.dumps({"_summary": summary, "preview": truncated}, ensure_ascii=False)
+        return json.dumps(truncated, ensure_ascii=False)
+
+    truncated = _truncate_strings(parsed, max_str)
+    return json.dumps(truncated, ensure_ascii=False)
+
+
+_KNOWLEDGE_TOOL_NAMES = frozenset({"search_knowledge_base"})
+
+
+def _tool_event_without_result(tool: ToolExecution) -> ToolExecution:
+    """Return a copy of ToolExecution with result truncated for SSE events.
+
+    Knowledge search tools: aggressive summary (full data in RunCompletedEvent.references).
+    Other tools: preserve JSON structure with truncated string values.
+    """
+    if tool.result is None or len(tool.result) <= _TOOL_RESULT_THRESHOLD:
+        return tool
+
+    if tool.tool_name in _KNOWLEDGE_TOOL_NAMES:
+        return replace(tool, result=_summarize_result(tool.result))
+    return replace(tool, result=_truncate_generic_result(tool.result))
+
+
 def create_tool_call_started_event(from_run_response: RunOutput, tool: ToolExecution) -> ToolCallStartedEvent:
     return ToolCallStartedEvent(
         session_id=from_run_response.session_id,
         agent_id=from_run_response.agent_id,  # type: ignore
         agent_name=from_run_response.agent_name,  # type: ignore
         run_id=from_run_response.run_id,
-        tool=tool,
+        tool=_tool_event_without_result(tool),
     )
 
 
@@ -578,7 +681,7 @@ def create_team_tool_call_started_event(
         team_id=from_run_response.team_id,  # type: ignore
         team_name=from_run_response.team_name,  # type: ignore
         run_id=from_run_response.run_id,
-        tool=tool,
+        tool=_tool_event_without_result(tool),
     )
 
 
@@ -590,7 +693,7 @@ def create_tool_call_completed_event(
         agent_id=from_run_response.agent_id,  # type: ignore
         agent_name=from_run_response.agent_name,  # type: ignore
         run_id=from_run_response.run_id,
-        tool=tool,
+        tool=_tool_event_without_result(tool),
         content=content,
         images=from_run_response.images,
         videos=from_run_response.videos,
@@ -606,7 +709,7 @@ def create_team_tool_call_completed_event(
         team_id=from_run_response.team_id,  # type: ignore
         team_name=from_run_response.team_name,  # type: ignore
         run_id=from_run_response.run_id,
-        tool=tool,
+        tool=_tool_event_without_result(tool),
         content=content,
         images=from_run_response.images,
         videos=from_run_response.videos,
@@ -622,7 +725,7 @@ def create_tool_call_error_event(
         agent_id=from_run_response.agent_id,  # type: ignore
         agent_name=from_run_response.agent_name,  # type: ignore
         run_id=from_run_response.run_id,
-        tool=tool,
+        tool=_tool_event_without_result(tool),
         error=error,
     )
 
@@ -635,7 +738,7 @@ def create_team_tool_call_error_event(
         team_id=from_run_response.team_id,  # type: ignore
         team_name=from_run_response.team_name,  # type: ignore
         run_id=from_run_response.run_id,
-        tool=tool,
+        tool=_tool_event_without_result(tool),
         error=error,
     )
 
