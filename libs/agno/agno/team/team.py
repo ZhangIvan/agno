@@ -608,7 +608,6 @@ class Team:
             update_knowledge=update_knowledge,
             knowledge_retriever=knowledge_retriever,
             references_format=references_format,
-            lean_references=lean_references,
             share_member_interactions=share_member_interactions,
             get_member_information_tool=get_member_information_tool,
             search_knowledge=search_knowledge,
@@ -677,6 +676,9 @@ class Team:
             callable_knowledge_cache_key=callable_knowledge_cache_key,
             callable_members_cache_key=callable_members_cache_key,
         )
+
+        # Custom: lean references for knowledge
+        self.lean_references: bool = lean_references
 
         # Component metadata (set by get_teams during DB loading)
         self._version: Optional[int] = None
@@ -1096,6 +1098,7 @@ class Team:
         metadata: Optional[Dict[str, Any]] = None,
         debug_mode: Optional[bool] = None,
         yield_run_output: bool = False,
+        background: bool = False,
         **kwargs: Any,
     ) -> Union[TeamRunOutput, AsyncIterator[Union[TeamRunOutputEvent, RunOutputEvent, TeamRunOutput]]]:
         return _run.acontinue_run_dispatch(
@@ -1113,6 +1116,7 @@ class Team:
             metadata=metadata,
             debug_mode=debug_mode,
             yield_run_output=yield_run_output,
+            background=background,
             **kwargs,
         )
 
@@ -1528,14 +1532,14 @@ class Team:
 
     # -*- Public convenience functions
     def get_run_output(
-        self, run_id: str, session_id: Optional[str] = None
+        self, run_id: str, session_id: Optional[str] = None, user_id: Optional[str] = None
     ) -> Optional[Union[TeamRunOutput, RunOutput]]:
-        return _storage.get_run_output(self, run_id=run_id, session_id=session_id)
+        return _storage.get_run_output(self, run_id=run_id, session_id=session_id, user_id=user_id)
 
     async def aget_run_output(
-        self, run_id: str, session_id: Optional[str] = None
+        self, run_id: str, session_id: Optional[str] = None, user_id: Optional[str] = None
     ) -> Optional[Union[TeamRunOutput, RunOutput]]:
-        return await _storage.aget_run_output(self, run_id=run_id, session_id=session_id)
+        return await _storage.aget_run_output(self, run_id=run_id, session_id=session_id, user_id=user_id)
 
     def get_last_run_output(self, session_id: Optional[str] = None) -> Optional[TeamRunOutput]:
         return _storage.get_last_run_output(self, session_id=session_id)

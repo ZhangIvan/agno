@@ -447,7 +447,7 @@ class MCPTools(Toolkit):
         try:
             await self.session.send_ping()
             return True
-        except (RuntimeError, BaseException):
+        except BaseException:
             return False
 
     async def connect(self, force: bool = False):
@@ -472,7 +472,7 @@ class MCPTools(Toolkit):
             # Catch CancelledError specifically to prevent it from propagating
             log_error(f"Failed to connect to {str(self)}: {e}")
             await self._safe_cleanup()
-        except (RuntimeError, BaseException) as e:
+        except BaseException as e:
             log_error(f"Failed to connect to {str(self)}: {e};", exc_info=True)
             # Ensure all resources are cleaned up to prevent async generator errors
             await self._safe_cleanup()
@@ -487,7 +487,7 @@ class MCPTools(Toolkit):
         if self._session_context is not None:
             try:
                 await self._session_context.__aexit__(None, None, None)
-            except Exception:
+            except BaseException:
                 pass
 
             self._session_context = None
@@ -497,17 +497,17 @@ class MCPTools(Toolkit):
         if self._context is not None:
             try:
                 await self._context.aclose()
-            except Exception:
+            except BaseException:
                 try:
                     await self._context.__aexit__(None, None, None)
-                except Exception:
+                except BaseException:
                     pass
 
             self._context = None
 
-            # Clear active contexts list
-            self._active_contexts = []
-            self._initialized = False
+        # Clear active contexts list
+        self._active_contexts = []
+        self._initialized = False
 
     async def _connect(self) -> None:
         """Connects to the MCP server and initializes the tools"""
@@ -559,14 +559,16 @@ class MCPTools(Toolkit):
 
         try:
             session_params = await self._context.__aenter__()  # type: ignore
-        except Exception:
-            # Clean up the async generator that failed to enter properly
-            # This prevents RuntimeError during garbage collection
+        except BaseException:
+            # Close the partially-entered transport
             if self._context is not None:
                 try:
-                    await self._context.aclose()
-                except Exception:
-                    pass
+                    await self._context.aclose()  # type: ignore[attr-defined]
+                except BaseException:
+                    try:
+                        await self._context.__aexit__(None, None, None)
+                    except BaseException:
+                        pass
                 self._context = None
             raise
 
@@ -576,19 +578,17 @@ class MCPTools(Toolkit):
         self._session_context = ClientSession(read, write, read_timeout_seconds=timedelta(seconds=client_timeout))  # type: ignore
         try:
             self.session = await self._session_context.__aenter__()  # type: ignore
-        except Exception:
-            # Clean up the session context that failed to enter
+        except BaseException:
             if self._session_context is not None:
                 try:
                     await self._session_context.__aexit__(None, None, None)
-                except Exception:
+                except BaseException:
                     pass
                 self._session_context = None
-            # Also clean up the already-entered context
             if self._context is not None:
                 try:
                     await self._context.__aexit__(None, None, None)
-                except Exception:
+                except BaseException:
                     pass
                 self._context = None
             raise
@@ -631,7 +631,7 @@ class MCPTools(Toolkit):
                     except (RuntimeError, Exception):
                         pass  # Silently ignore cleanup errors
                     self._context = None
-            except (RuntimeError, BaseException):
+            except BaseException:
                 pass  # Silently ignore all cleanup errors
 
         self._initialized = False
@@ -720,7 +720,7 @@ class MCPTools(Toolkit):
                 except Exception as e:
                     log_error(f"Failed to register tool {tool.name}: {str(e)}")
 
-        except (RuntimeError, BaseException):
+        except BaseException:
             log_error(f"Failed to get tools for {str(self)}")
             raise
 
@@ -740,5 +740,5 @@ class MCPTools(Toolkit):
 
             self._initialized = True
 
-        except (RuntimeError, BaseException):
+        except BaseException:
             log_error("Failed to initialize MCP toolkit")
