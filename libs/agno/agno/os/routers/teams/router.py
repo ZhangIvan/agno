@@ -218,7 +218,7 @@ async def _resume_stream_generator(
                 run_output = await team.aget_run_output(run_id=run_id, session_id=session_id)
             except Exception as e:
                 error = {"event": "error", "error": f"Failed to fetch run from database: {str(e)}"}
-                yield f"event: error\ndata: {json.dumps(error)}\n\n"
+                yield f"event: error\ndata: {json.dumps(error, ensure_ascii=False)}\n\n"
                 return
             if run_output and run_output.events:
                 meta: dict = {
@@ -228,7 +228,7 @@ async def _resume_stream_generator(
                     "total_events": len(run_output.events),
                     "message": "Run completed. Replaying all events from database.",
                 }
-                yield f"event: replay\ndata: {json.dumps(meta)}\n\n"
+                yield f"event: replay\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
 
                 for idx, event in enumerate(run_output.events):
                     event_dict = event.to_dict()
@@ -246,7 +246,7 @@ async def _resume_stream_generator(
                     "total_events": 0,
                     "message": "Run completed but no events stored.",
                 }
-                yield f"event: replay\ndata: {json.dumps(meta)}\n\n"
+                yield f"event: replay\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
                 return
 
         # Run not found anywhere
@@ -273,7 +273,7 @@ async def _resume_stream_generator(
             "last_event_index_requested": last_event_index if last_event_index is not None else -1,
             "message": f"Run {buffer_status.value}. Replaying {len(missed_events)} missed events (of {total_buffered} total).",
         }
-        yield f"event: replay\ndata: {json.dumps(meta)}\n\n"
+        yield f"event: replay\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
 
         for ev_index, buffered_event in missed_events:
             event_dict = buffered_event.to_dict()

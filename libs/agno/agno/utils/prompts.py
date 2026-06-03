@@ -20,11 +20,11 @@ def get_json_output_prompt(output_schema: Union[str, list, dict, BaseModel]) -> 
             json_output_prompt += "\n</json_fields>"
         elif isinstance(output_schema, list):
             json_output_prompt += "\n<json_fields>"
-            json_output_prompt += f"\n{json.dumps(output_schema)}"
+            json_output_prompt += f"\n{json.dumps(output_schema, ensure_ascii=False)}"
             json_output_prompt += "\n</json_fields>"
         elif isinstance(output_schema, dict):
             json_output_prompt += "\n<json_fields>"
-            json_output_prompt += f"\n{json.dumps(output_schema)}"
+            json_output_prompt += f"\n{json.dumps(output_schema, ensure_ascii=False)}"
             json_output_prompt += "\n</json_fields>"
         elif (isinstance(output_schema, type) and issubclass(output_schema, BaseModel)) or isinstance(
             output_schema, BaseModel

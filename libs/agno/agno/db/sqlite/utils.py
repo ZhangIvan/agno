@@ -402,7 +402,7 @@ def serialize_cultural_knowledge_for_db(cultural_knowledge: CulturalKnowledge) -
     if cultural_knowledge.notes is not None:
         content_dict["notes"] = cultural_knowledge.notes
 
-    return json.dumps(content_dict) if content_dict else None  # type: ignore
+    return json.dumps(content_dict, ensure_ascii=False) if content_dict else None  # type: ignore
 
 
 def deserialize_cultural_knowledge_from_db(db_row: Dict[str, Any]) -> CulturalKnowledge:

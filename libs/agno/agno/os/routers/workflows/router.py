@@ -68,7 +68,9 @@ async def handle_workflow_via_websocket(
         factory_input = message.get("factory_input")
 
         if not workflow_id:
-            await websocket.send_text(json.dumps({"event": "error", "error": "workflow_id is required"}))
+            await websocket.send_text(
+                json.dumps({"event": "error", "error": "workflow_id is required"}, ensure_ascii=False)
+            )
             return
 
         # Get workflow from OS — supports both static and factory components
@@ -103,7 +105,9 @@ async def handle_workflow_via_websocket(
                     ctx=ctx,
                 )
             except Exception as e:
-                await websocket.send_text(json.dumps({"event": "error", "error": f"Factory error: {e}"}))
+                await websocket.send_text(
+                    json.dumps({"event": "error", "error": f"Factory error: {e}"}, ensure_ascii=False)
+                )
                 return
         else:
             try:
@@ -111,15 +115,21 @@ async def handle_workflow_via_websocket(
                     workflow_id=workflow_id, workflows=os.workflows, db=os.db, registry=os.registry, create_fresh=True
                 )
             except Exception as e:
-                await websocket.send_text(json.dumps({"event": "error", "error": f"Error resolving workflow: {e}"}))
+                await websocket.send_text(
+                    json.dumps({"event": "error", "error": f"Error resolving workflow: {e}"}, ensure_ascii=False)
+                )
                 return
         if not workflow:
-            await websocket.send_text(json.dumps({"event": "error", "error": f"Workflow {workflow_id} not found"}))
+            await websocket.send_text(
+                json.dumps({"event": "error", "error": f"Workflow {workflow_id} not found"}, ensure_ascii=False)
+            )
             return
 
         if isinstance(workflow, RemoteWorkflow):
             await websocket.send_text(
-                json.dumps({"event": "error", "error": "Remote workflows are not supported via WebSocket"})
+                json.dumps(
+                    {"event": "error", "error": "Remote workflows are not supported via WebSocket"}, ensure_ascii=False
+                )
             )
             return
 
@@ -156,7 +166,8 @@ async def handle_workflow_via_websocket(
                     "error_type": e.type,
                     "error_id": e.error_id,
                     "additional_data": e.additional_data,
-                }
+                },
+                ensure_ascii=False,
             )
         )
     except Exception as e:
@@ -168,7 +179,7 @@ async def handle_workflow_via_websocket(
             "error_id": e.error_id if hasattr(e, "error_id") else None,
         }
         error_payload = {k: v for k, v in error_payload.items() if v is not None}
-        await websocket.send_text(json.dumps(error_payload))
+        await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
 
 
 async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: "AgentOS"):
@@ -184,7 +195,9 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
         last_event_index = message.get("last_event_index")  # 0-based index of last received event
 
         if not run_id:
-            await websocket.send_text(json.dumps({"event": "error", "error": "run_id is required for subscription"}))
+            await websocket.send_text(
+                json.dumps({"event": "error", "error": "run_id is required for subscription"}, ensure_ascii=False)
+            )
             return
 
         # Check if run exists in event buffer
@@ -217,7 +230,8 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                                         "status": workflow_run.status.value if workflow_run.status else "unknown",
                                         "total_events": len(workflow_run.events),
                                         "message": "Run completed. Replaying all events from database.",
-                                    }
+                                    },
+                                    ensure_ascii=False,
                                 )
                             )
 
@@ -229,7 +243,9 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                                 if "run_id" not in event_dict:
                                     event_dict["run_id"] = run_id
 
-                                await websocket.send_text(json.dumps(event_dict, default=json_serializer))
+                                await websocket.send_text(
+                                    json.dumps(event_dict, default=json_serializer, ensure_ascii=False)
+                                )
                         else:
                             await websocket.send_text(
                                 json.dumps(
@@ -239,14 +255,17 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                                         "status": workflow_run.status.value if workflow_run.status else "unknown",
                                         "total_events": 0,
                                         "message": "Run completed but no events stored.",
-                                    }
+                                    },
+                                    ensure_ascii=False,
                                 )
                             )
                         return
 
             # Run not found anywhere
             await websocket.send_text(
-                json.dumps({"event": "error", "error": f"Run {run_id} not found in buffer or database"})
+                json.dumps(
+                    {"event": "error", "error": f"Run {run_id} not found in buffer or database"}, ensure_ascii=False
+                )
             )
             return
 
@@ -263,7 +282,8 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                         "status": buffer_status.value,
                         "total_events": len(all_events),
                         "message": f"Run {buffer_status.value}. Replaying all events.",
-                    }
+                    },
+                    ensure_ascii=False,
                 )
             )
 
@@ -277,7 +297,7 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                 if "run_id" not in event_dict:
                     event_dict["run_id"] = run_id
 
-                await websocket.send_text(json.dumps(event_dict))
+                await websocket.send_text(json.dumps(event_dict, ensure_ascii=False))
             return
 
         # Run is still active - send missed events and subscribe to new ones
@@ -295,7 +315,8 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                         "missed_events": len(missed_events),
                         "current_event_count": current_event_count,
                         "message": f"Catching up on {len(missed_events)} missed events.",
-                    }
+                    },
+                    ensure_ascii=False,
                 )
             )
 
@@ -309,7 +330,7 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                 if "run_id" not in event_dict:
                     event_dict["run_id"] = run_id
 
-                await websocket.send_text(json.dumps(event_dict))
+                await websocket.send_text(json.dumps(event_dict, ensure_ascii=False))
 
         # Register websocket for future events
         await websocket_manager.register_websocket(run_id, websocket)
@@ -323,7 +344,8 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                     "status": "running",
                     "current_event_count": current_event_count,
                     "message": "Subscribed to workflow run. You will receive new events as they occur.",
-                }
+                },
+                ensure_ascii=False,
             )
         )
 
@@ -336,7 +358,8 @@ async def handle_workflow_subscription(websocket: WebSocket, message: dict, os: 
                 {
                     "event": "error",
                     "error": f"Subscription failed: {str(e)}",
-                }
+                },
+                ensure_ascii=False,
             )
         )
 
@@ -350,28 +373,37 @@ async def handle_workflow_continue_via_websocket(websocket: WebSocket, message: 
         step_requirements_data = message.get("step_requirements")
 
         if not workflow_id:
-            await websocket.send_text(json.dumps({"event": "error", "error": "workflow_id is required"}))
+            await websocket.send_text(
+                json.dumps({"event": "error", "error": "workflow_id is required"}, ensure_ascii=False)
+            )
             return
         if not run_id:
-            await websocket.send_text(json.dumps({"event": "error", "error": "run_id is required"}))
+            await websocket.send_text(json.dumps({"event": "error", "error": "run_id is required"}, ensure_ascii=False))
             return
 
         workflow = get_workflow_by_id(
             workflow_id=workflow_id, workflows=os.workflows, db=os.db, registry=os.registry, create_fresh=True
         )
         if not workflow:
-            await websocket.send_text(json.dumps({"event": "error", "error": f"Workflow {workflow_id} not found"}))
+            await websocket.send_text(
+                json.dumps({"event": "error", "error": f"Workflow {workflow_id} not found"}, ensure_ascii=False)
+            )
             return
         if isinstance(workflow, RemoteWorkflow):
             await websocket.send_text(
-                json.dumps({"event": "error", "error": "Continue is not supported for remote workflows via WebSocket"})
+                json.dumps(
+                    {"event": "error", "error": "Continue is not supported for remote workflows via WebSocket"},
+                    ensure_ascii=False,
+                )
             )
             return
 
         # Load the paused run
         existing_run = await workflow.aget_run_output(run_id=run_id, session_id=session_id)
         if existing_run is None:
-            await websocket.send_text(json.dumps({"event": "error", "error": f"Run {run_id} not found"}))
+            await websocket.send_text(
+                json.dumps({"event": "error", "error": f"Run {run_id} not found"}, ensure_ascii=False)
+            )
             return
         if not getattr(existing_run, "is_paused", False):
             status = getattr(existing_run, "status", None)
@@ -380,7 +412,8 @@ async def handle_workflow_continue_via_websocket(websocket: WebSocket, message: 
                     {
                         "event": "error",
                         "error": f"Run is not paused (status={getattr(status, 'value', status)})",
-                    }
+                    },
+                    ensure_ascii=False,
                 )
             )
             return
@@ -394,7 +427,7 @@ async def handle_workflow_continue_via_websocket(websocket: WebSocket, message: 
                 existing_run.step_requirements = parsed_requirements
             except Exception as e:
                 await websocket.send_text(
-                    json.dumps({"event": "error", "error": f"Invalid step_requirements: {str(e)}"})
+                    json.dumps({"event": "error", "error": f"Invalid step_requirements: {str(e)}"}, ensure_ascii=False)
                 )
                 return
 
@@ -420,11 +453,11 @@ async def handle_workflow_continue_via_websocket(websocket: WebSocket, message: 
                 )
                 async for event in response_stream:
                     event_dict = event.model_dump() if hasattr(event, "model_dump") else event.to_dict()
-                    await websocket.send_text(json.dumps(event_dict, default=json_serializer))
+                    await websocket.send_text(json.dumps(event_dict, default=json_serializer, ensure_ascii=False))
             except Exception as e:
                 logger.error(f"Error in continue stream: {e}")
                 try:
-                    await websocket.send_text(json.dumps({"event": "error", "error": str(e)}))
+                    await websocket.send_text(json.dumps({"event": "error", "error": str(e)}, ensure_ascii=False))
                 except Exception:
                     pass
 
@@ -439,7 +472,8 @@ async def handle_workflow_continue_via_websocket(websocket: WebSocket, message: 
                     "error_type": e.type,
                     "error_id": e.error_id,
                     "additional_data": e.additional_data,
-                }
+                },
+                ensure_ascii=False,
             )
         )
     except Exception as e:
@@ -451,7 +485,7 @@ async def handle_workflow_continue_via_websocket(websocket: WebSocket, message: 
             "error_id": e.error_id if hasattr(e, "error_id") else None,
         }
         error_payload = {k: v for k, v in error_payload.items() if v is not None}
-        await websocket.send_text(json.dumps(error_payload))
+        await websocket.send_text(json.dumps(error_payload, ensure_ascii=False))
 
 
 async def workflow_response_streamer(
@@ -498,7 +532,7 @@ async def workflow_response_streamer(
             _last_run = _session.runs[-1]
             if getattr(_last_run, "is_paused", False):
                 run_dict = _last_run.to_dict()
-                run_json = json.dumps(run_dict, default=json_serializer, separators=(",", ":"))
+                run_json = json.dumps(run_dict, default=json_serializer, separators=(",", ":"), ensure_ascii=False)
                 yield f"event: WorkflowRunOutput\ndata: {run_json}\n\n"
 
     except (InputCheckError, OutputCheckError) as e:
@@ -619,7 +653,7 @@ async def workflow_continue_response_streamer(
             _last_run = _session.runs[-1]
             if getattr(_last_run, "is_paused", False):
                 run_dict = _last_run.to_dict()
-                run_json = json.dumps(run_dict, default=json_serializer, separators=(",", ":"))
+                run_json = json.dumps(run_dict, default=json_serializer, separators=(",", ":"), ensure_ascii=False)
                 yield f"event: WorkflowRunOutput\ndata: {run_json}\n\n"
 
     except (InputCheckError, OutputCheckError) as e:
@@ -669,7 +703,7 @@ async def _resume_stream_generator(
                 run_output = await workflow.aget_run_output(run_id=run_id, session_id=session_id)
             except Exception as e:
                 error = {"event": "error", "error": f"Failed to fetch run from database: {str(e)}"}
-                yield f"event: error\ndata: {json.dumps(error)}\n\n"
+                yield f"event: error\ndata: {json.dumps(error, ensure_ascii=False)}\n\n"
                 return
             if run_output and run_output.events:
                 meta: dict = {
@@ -679,7 +713,7 @@ async def _resume_stream_generator(
                     "total_events": len(run_output.events),
                     "message": "Run completed. Replaying all events from database.",
                 }
-                yield f"event: replay\ndata: {json.dumps(meta)}\n\n"
+                yield f"event: replay\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
 
                 for idx, event in enumerate(run_output.events):
                     event_dict = event.to_dict()
@@ -697,12 +731,12 @@ async def _resume_stream_generator(
                     "total_events": 0,
                     "message": "Run completed but no events stored.",
                 }
-                yield f"event: replay\ndata: {json.dumps(meta)}\n\n"
+                yield f"event: replay\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
                 return
 
         # Run not found anywhere
         error = {"event": "error", "error": f"Run {run_id} not found in buffer or database"}
-        yield f"event: error\ndata: {json.dumps(error)}\n\n"
+        yield f"event: error\ndata: {json.dumps(error, ensure_ascii=False)}\n\n"
         return
 
     if buffer_status in (RunStatus.completed, RunStatus.error, RunStatus.cancelled, RunStatus.paused):
@@ -724,7 +758,7 @@ async def _resume_stream_generator(
             "last_event_index_requested": last_event_index if last_event_index is not None else -1,
             "message": f"Run {buffer_status.value}. Replaying {len(missed_events)} missed events (of {total_buffered} total).",
         }
-        yield f"event: replay\ndata: {json.dumps(meta)}\n\n"
+        yield f"event: replay\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
 
         for ev_index, buffered_event in missed_events:
             event_dict = buffered_event.to_dict()
@@ -754,7 +788,7 @@ async def _resume_stream_generator(
                 "current_event_count": current_count,
                 "message": f"Catching up on {len(missed_events)} missed events.",
             }
-            yield f"event: catch_up\ndata: {json.dumps(meta)}\n\n"
+            yield f"event: catch_up\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
 
             for ev_index, buffered_event in missed_events:
                 event_dict = buffered_event.to_dict()
@@ -863,7 +897,9 @@ def get_websocket_router(
                 if action == "authenticate":
                     token = message.get("token")
                     if not token:
-                        await websocket.send_text(json.dumps({"event": "auth_error", "error": "Token is required"}))
+                        await websocket.send_text(
+                            json.dumps({"event": "auth_error", "error": "Token is required"}, ensure_ascii=False)
+                        )
                         continue
 
                     if jwt_auth_enabled and jwt_validator:
@@ -885,7 +921,8 @@ def get_websocket_router(
                                         "event": "authenticated",
                                         "message": "JWT authentication successful.",
                                         "user_id": claims["user_id"],
-                                    }
+                                    },
+                                    ensure_ascii=False,
                                 )
                             )
                         except Exception as e:
@@ -897,7 +934,8 @@ def get_websocket_router(
                                         "event": "auth_error",
                                         "error": error_msg,
                                         "error_type": error_type,
-                                    }
+                                    },
+                                    ensure_ascii=False,
                                 )
                             )
                         continue
@@ -905,7 +943,9 @@ def get_websocket_router(
                         # Legacy os_security_key authentication
                         await websocket_manager.authenticate_websocket(websocket)
                     else:
-                        await websocket.send_text(json.dumps({"event": "auth_error", "error": "Invalid token"}))
+                        await websocket.send_text(
+                            json.dumps({"event": "auth_error", "error": "Invalid token"}, ensure_ascii=False)
+                        )
                     continue
 
                 # Check authentication for all other actions (only when required)
@@ -916,14 +956,15 @@ def get_websocket_router(
                             {
                                 "event": "auth_required",
                                 "error": f"Authentication required. Send authenticate action with valid {auth_type}.",
-                            }
+                            },
+                            ensure_ascii=False,
                         )
                     )
                     continue
 
                 # Handle authenticated actions
                 elif action == "ping":
-                    await websocket.send_text(json.dumps({"event": "pong"}))
+                    await websocket.send_text(json.dumps({"event": "pong"}, ensure_ascii=False))
 
                 elif action == "start-workflow":
                     # Add user context to message if available from JWT auth
@@ -946,7 +987,9 @@ def get_websocket_router(
                     await handle_workflow_continue_via_websocket(websocket, message, os)
 
                 else:
-                    await websocket.send_text(json.dumps({"event": "error", "error": f"Unknown action: {action}"}))
+                    await websocket.send_text(
+                        json.dumps({"event": "error", "error": f"Unknown action: {action}"}, ensure_ascii=False)
+                    )
 
         except Exception as e:
             if "1012" not in str(e) and "1001" not in str(e):

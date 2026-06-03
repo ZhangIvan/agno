@@ -104,7 +104,7 @@ class JsonDb(BaseDb):
         except FileNotFoundError:
             if create_table_if_not_found:
                 with open(file_path, "w") as f:
-                    json.dump([], f)
+                    json.dump([], f, ensure_ascii=False)
             return []
 
         except json.JSONDecodeError as e:
@@ -128,7 +128,7 @@ class JsonDb(BaseDb):
 
         try:
             with open(file_path, "w") as f:
-                json.dump(data, f, indent=2, default=str)
+                json.dump(data, f, indent=2, default=str, ensure_ascii=False)
 
         except Exception as e:
             log_error(f"Error writing to the {file_path} JSON file: {str(e)}")

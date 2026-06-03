@@ -461,23 +461,83 @@ def get_session_name(session: Dict[str, Any]) -> str:
 
     # For team, filter to team runs (runs without agent_id); for agents, use all runs
     if session_type == "team":
-        runs_to_check = [r for r in runs if not r.get("agent_id")]
+        runs_to_check = [nr for nr in (_normalize_run(r) for r in runs) if not nr.get("agent_id")]
     else:
-        runs_to_check = runs
+        runs_to_check = [_normalize_run(r) for r in runs]
 
     # Find the first user message across runs
-    for r in runs_to_check:
-        if r is None:
-            continue
-        run_dict = r if isinstance(r, dict) else r.to_dict()
-
+    for run_dict in runs_to_check:
         for message in run_dict.get("messages") or []:
             if message.get("role") == "user" and message.get("content"):
-                return message["content"]
+                return _extract_session_name_from_content(message["content"])
 
-        run_input = r.get("input")
+        run_input = run_dict.get("input")
         if run_input is not None:
-            return stringify_input_content(run_input)
+            name = _session_name_from_input(run_input)
+            if name:
+                return name
+
+    return ""
+
+
+def _normalize_run(r: Any) -> Dict[str, Any]:
+    """Ensure a run object is a dict."""
+    if r is None:
+        return {}
+    return r if isinstance(r, dict) else r.to_dict()
+
+
+_SESSION_NAME_MAX_LENGTH = 100
+_REFERENCE_MARKERS = [
+    "\n\nUse the following references",
+    "\n\n<references>",
+    "\n\n<additional context>",
+]
+
+
+def _extract_session_name_from_content(content: str) -> str:
+    """Extract a clean session name from user message content.
+
+    Strips knowledge base references, system prompts, and truncates to a readable length.
+    """
+    if not content:
+        return ""
+
+    # Strip everything after reference/context markers
+    clean = content
+    for marker in _REFERENCE_MARKERS:
+        idx = clean.find(marker)
+        if idx > 0:
+            clean = clean[:idx]
+
+    clean = clean.strip()
+
+    # Truncate to max length
+    if len(clean) > _SESSION_NAME_MAX_LENGTH:
+        clean = clean[: _SESSION_NAME_MAX_LENGTH - 3] + "..."
+
+    return clean
+
+
+def _session_name_from_input(run_input: Any) -> str:
+    """Extract a clean session name from run input, handling Message objects and dicts."""
+    if isinstance(run_input, str):
+        return _extract_session_name_from_content(run_input)
+
+    if isinstance(run_input, dict):
+        # Try to get the content field directly (Message dict)
+        content = run_input.get("content")
+        if isinstance(content, str) and content:
+            return _extract_session_name_from_content(content)
+        # Fallback: stringify and clean
+        return _extract_session_name_from_content(stringify_input_content(run_input))
+
+    if isinstance(run_input, list) and run_input:
+        # List of messages — find first user message
+        for item in run_input:
+            if isinstance(item, dict) and item.get("role") == "user" and item.get("content"):
+                return _extract_session_name_from_content(item["content"])
+        return _extract_session_name_from_content(str(run_input[0]))
 
     return ""
 

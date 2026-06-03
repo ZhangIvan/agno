@@ -213,7 +213,7 @@ def json_serializer(obj: Any) -> str:
     Returns:
         JSON string representation of the object.
     """
-    return json.dumps(obj, cls=CustomJSONEncoder)
+    return json.dumps(obj, cls=CustomJSONEncoder, ensure_ascii=False)
 
 
 def serialize_session_json_fields(session: dict) -> dict:
@@ -229,21 +229,21 @@ def serialize_session_json_fields(session: dict) -> dict:
         dict: The dictionary with JSON fields serialized.
     """
     if session.get("session_data") is not None:
-        session["session_data"] = json.dumps(session["session_data"], cls=CustomJSONEncoder)
+        session["session_data"] = json.dumps(session["session_data"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("agent_data") is not None:
-        session["agent_data"] = json.dumps(session["agent_data"], cls=CustomJSONEncoder)
+        session["agent_data"] = json.dumps(session["agent_data"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("team_data") is not None:
-        session["team_data"] = json.dumps(session["team_data"], cls=CustomJSONEncoder)
+        session["team_data"] = json.dumps(session["team_data"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("workflow_data") is not None:
-        session["workflow_data"] = json.dumps(session["workflow_data"], cls=CustomJSONEncoder)
+        session["workflow_data"] = json.dumps(session["workflow_data"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("metadata") is not None:
-        session["metadata"] = json.dumps(session["metadata"], cls=CustomJSONEncoder)
+        session["metadata"] = json.dumps(session["metadata"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("chat_history") is not None:
-        session["chat_history"] = json.dumps(session["chat_history"], cls=CustomJSONEncoder)
+        session["chat_history"] = json.dumps(session["chat_history"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("summary") is not None:
-        session["summary"] = json.dumps(session["summary"], cls=CustomJSONEncoder)
+        session["summary"] = json.dumps(session["summary"], cls=CustomJSONEncoder, ensure_ascii=False)
     if session.get("runs") is not None:
-        session["runs"] = json.dumps(session["runs"], cls=CustomJSONEncoder)
+        session["runs"] = json.dumps(session["runs"], cls=CustomJSONEncoder, ensure_ascii=False)
 
     return session
 

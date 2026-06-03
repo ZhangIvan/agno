@@ -637,10 +637,8 @@ def _truncate_generic_result(result: str, max_str: int = 200, max_items: int = 5
     if isinstance(parsed, list):
         head = parsed[:max_items]
         truncated = _truncate_strings(head, max_str)
-        if len(parsed) > max_items:
-            summary = {"_truncated": True, "shown_items": max_items, "total_items": len(parsed), "original_size": size_str}
-            return json.dumps({"_summary": summary, "preview": truncated}, ensure_ascii=False)
-        return json.dumps(truncated, ensure_ascii=False)
+        summary = {"_truncated": True, "shown_items": len(head), "total_items": len(parsed), "original_size": size_str}
+        return json.dumps({"_summary": summary, "preview": truncated}, ensure_ascii=False)
 
     truncated = _truncate_strings(parsed, max_str)
     return json.dumps(truncated, ensure_ascii=False)

@@ -488,7 +488,7 @@ def get_chat_history_function(agent: Agent, session: AgentSession) -> Callable:
         all_chats = session.get_messages()
 
         if len(all_chats) == 0:
-            return json.dumps([])
+            return json.dumps([], ensure_ascii=False)
 
         for chat in all_chats:  # type: ignore
             history.append(chat.to_dict())  # type: ignore
@@ -496,7 +496,7 @@ def get_chat_history_function(agent: Agent, session: AgentSession) -> Callable:
         if num_chats is not None:
             history = history[-num_chats:]
 
-        return json.dumps(history)
+        return json.dumps(history, ensure_ascii=False)
 
     return get_chat_history
 
@@ -521,7 +521,7 @@ def get_tool_call_history_function(agent: Agent, session: AgentSession) -> Calla
         tool_calls = session.get_tool_calls(num_calls=num_calls)
         if len(tool_calls) == 0:
             return json.dumps([])
-        return json.dumps(tool_calls)
+        return json.dumps(tool_calls, ensure_ascii=False)
 
     return get_tool_call_history
 
@@ -582,7 +582,7 @@ def add_to_knowledge(agent: Agent, query: str, result: str) -> str:
         return "Knowledge does not support insert"
 
     document_name = query.replace(" ", "_").replace("?", "").replace("!", "").replace(".", "")
-    document_content = json.dumps({"query": query, "result": result})
+    document_content = json.dumps({"query": query, "result": result}, ensure_ascii=False)
     log_info(f"Adding document to Knowledge: {document_name}: {document_content}")
     from agno.knowledge.reader.text_reader import TextReader
 
@@ -679,7 +679,7 @@ def get_search_past_sessions_function(
                 continue
             results.append(_extract_session_preview(session, num_runs=_num_runs))
 
-        return json.dumps(results)
+        return json.dumps(results, ensure_ascii=False)
 
     return search_past_sessions
 
@@ -734,7 +734,7 @@ async def aget_search_past_sessions_function(
                 continue
             results.append(_extract_session_preview(session, num_runs=_num_runs))
 
-        return json.dumps(results)
+        return json.dumps(results, ensure_ascii=False)
 
     return Function.from_callable(search_past_sessions, name="search_past_sessions")
 

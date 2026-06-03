@@ -4807,7 +4807,7 @@ def save_run_response_to_file(
             else:
                 import json
 
-                fn_path.write_text(json.dumps(run_response.content, indent=2))
+                fn_path.write_text(json.dumps(run_response.content, indent=2, ensure_ascii=False))
         except Exception as e:
             log_warning(f"Failed to save output to file: {str(e)}")
 

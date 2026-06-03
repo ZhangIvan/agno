@@ -145,7 +145,7 @@ class GcsJsonDb(BaseDb):
         blob = self.bucket.blob(blob_name)
 
         try:
-            json_data = json.dumps(data, indent=2, default=str)
+            json_data = json.dumps(data, indent=2, default=str, ensure_ascii=False)
             blob.upload_from_string(json_data, content_type="application/json")
 
         except Exception as e:

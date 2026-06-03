@@ -1,12 +1,13 @@
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel
 
 from agno.exceptions import ModelAuthenticationError
 from agno.models.message import Message
 from agno.models.openai.open_responses import OpenResponses
+from agno.models.response import ModelResponse
 from agno.models.volcengine._tools import inject_builtin_tools
 
 
@@ -144,3 +145,41 @@ class VolcengineResponses(OpenResponses):
         )
 
         return params
+
+    def _strip_redundant_provider_data(self, model_response: ModelResponse) -> None:
+        """Strip redundant fields from provider_data that waste context length.
+
+        Volcengine returns reasoning_output with encrypted_content (large base64 blob)
+        and summary text that duplicates reasoning_content. These are only needed for
+        server-side state restoration (store=False ZDR mode) and should not be sent
+        to the client.
+        """
+        if model_response.provider_data is None:
+            return
+
+        reasoning_output = model_response.provider_data.get("reasoning_output")
+        if not isinstance(reasoning_output, dict):
+            return
+
+        # Remove encrypted_content — large base64 blob not useful client-side
+        reasoning_output.pop("encrypted_content", None)
+
+        # Remove summary text that duplicates reasoning_content
+        if model_response.reasoning_content and reasoning_output.get("summary"):
+            reasoning_output.pop("summary", None)
+
+        # If reasoning_output is now empty or only has type, remove it entirely
+        if not reasoning_output or (len(reasoning_output) == 1 and "type" in reasoning_output):
+            model_response.provider_data.pop("reasoning_output", None)
+
+    def _parse_provider_response(self, response, **kwargs) -> ModelResponse:
+        model_response = super()._parse_provider_response(response, **kwargs)
+        self._strip_redundant_provider_data(model_response)
+        return model_response
+
+    def _parse_provider_response_delta(
+        self, stream_event, assistant_message: Message, tool_use: Dict[str, Any]
+    ) -> Tuple[ModelResponse, Dict[str, Any]]:
+        model_response, tool_use = super()._parse_provider_response_delta(stream_event, assistant_message, tool_use)
+        self._strip_redundant_provider_data(model_response)
+        return model_response, tool_use
