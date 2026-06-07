@@ -450,6 +450,29 @@ class MCPTools(Toolkit):
         except BaseException:
             return False
 
+    async def _safe_cleanup(self) -> None:
+        """Close any partially-entered MCP contexts"""
+        if self._session_context is not None:
+            try:
+                await self._session_context.__aexit__(None, None, None)
+            except BaseException:
+                pass
+            self._session_context = None
+            self.session = None
+
+        if self._context is not None:
+            try:
+                await self._context.aclose()  # type: ignore[attr-defined]
+            except BaseException:
+                try:
+                    await self._context.__aexit__(None, None, None)
+                except BaseException:
+                    pass
+            self._context = None
+
+        self._active_contexts = []
+        self._initialized = False
+
     async def connect(self, force: bool = False):
         """Initialize a MCPTools instance and connect to the contextual MCP server"""
 
@@ -473,41 +496,9 @@ class MCPTools(Toolkit):
             log_error(f"Failed to connect to {str(self)}: {e}")
             await self._safe_cleanup()
         except BaseException as e:
-            log_error(f"Failed to connect to {str(self)}: {e};", exc_info=True)
+            log_error(f"Failed to connect to {str(self)}: {e}", exc_info=True)
             # Ensure all resources are cleaned up to prevent async generator errors
             await self._safe_cleanup()
-
-    async def _safe_cleanup(self) -> None:
-        """Safely clean up all MCP resources, suppressing all errors.
-
-        This method ensures that async generator cleanup errors don't propagate
-        and crash the event loop. It should be called when the connection fails.
-        """
-        # Clean up session context
-        if self._session_context is not None:
-            try:
-                await self._session_context.__aexit__(None, None, None)
-            except BaseException:
-                pass
-
-            self._session_context = None
-            self.session = None
-
-        # Clean up main context (async generator)
-        if self._context is not None:
-            try:
-                await self._context.aclose()
-            except BaseException:
-                try:
-                    await self._context.__aexit__(None, None, None)
-                except BaseException:
-                    pass
-
-            self._context = None
-
-        # Clear active contexts list
-        self._active_contexts = []
-        self._initialized = False
 
     async def _connect(self) -> None:
         """Connects to the MCP server and initializes the tools"""

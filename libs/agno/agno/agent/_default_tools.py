@@ -159,9 +159,7 @@ def create_knowledge_search_tool(
                 unique.append(doc)
         return unique if unique else None
 
-    def _dedup_raw_docs(
-        all_raw_docs: list, to_ref: Any
-    ) -> tuple:
+    def _dedup_raw_docs(all_raw_docs: list, to_ref: Any) -> tuple:
         """Dedup raw Document objects using content hashing.
 
         Returns (unique_raw_docs, ref_dicts_or_None).

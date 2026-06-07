@@ -297,7 +297,9 @@ def get_system_message(
         user_memories = agent.memory_manager.get_user_memories(user_id=user_id)  # type: ignore
 
         if user_memories and len(user_memories) > 0:
-            parts.append("You have access to user info and preferences from previous interactions that you can use to personalize your response:\n\n")
+            parts.append(
+                "You have access to user info and preferences from previous interactions that you can use to personalize your response:\n\n"
+            )
             memories_parts: list[str] = ["<memories_from_previous_interactions>"]
             for _memory in user_memories:  # type: ignore
                 memories_parts.append(f"\n- {_memory.memory}")
@@ -654,7 +656,9 @@ async def aget_system_message(
             user_memories = agent.memory_manager.get_user_memories(user_id=user_id)  # type: ignore
 
         if user_memories and len(user_memories) > 0:
-            parts.append("You have access to user info and preferences from previous interactions that you can use to personalize your response:\n\n")
+            parts.append(
+                "You have access to user info and preferences from previous interactions that you can use to personalize your response:\n\n"
+            )
             memories_parts: list[str] = ["<memories_from_previous_interactions>"]
             for _memory in user_memories:  # type: ignore
                 memories_parts.append(f"\n- {_memory.memory}")
@@ -960,7 +964,9 @@ def get_user_message(
                 )
 
             # Convert to string for concatenation operations
-            user_msg_parts: list[str] = [get_text_from_message(user_msg_content) if user_msg_content is not None else ""]
+            user_msg_parts: list[str] = [
+                get_text_from_message(user_msg_content) if user_msg_content is not None else ""
+            ]
 
             # 4.1 Add knowledge references to user message
             if (
@@ -1125,7 +1131,9 @@ async def aget_user_message(
                 )
 
             # Convert to string for concatenation operations
-            user_msg_parts: list[str] = [get_text_from_message(user_msg_content) if user_msg_content is not None else ""]
+            user_msg_parts: list[str] = [
+                get_text_from_message(user_msg_content) if user_msg_content is not None else ""
+            ]
 
             # 4.1 Add knowledge references to user message
             if (

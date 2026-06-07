@@ -1757,13 +1757,17 @@ class Knowledge(RemoteKnowledge):
                 # Insert with per-document hash
                 if self.vector_db.upsert_available() and upsert:
                     try:
-                        await self.vector_db.async_upsert(doc_hash, source_docs, _filters_from_metadata(content.metadata))
+                        await self.vector_db.async_upsert(
+                            doc_hash, source_docs, _filters_from_metadata(content.metadata)
+                        )
                     except Exception as e:
                         log_error(f"Error upserting document from {source_url}: {e}", exc_info=True)
                         continue
                 else:
                     try:
-                        await self.vector_db.async_insert(doc_hash, documents=source_docs, filters=_filters_from_metadata(content.metadata))
+                        await self.vector_db.async_insert(
+                            doc_hash, documents=source_docs, filters=_filters_from_metadata(content.metadata)
+                        )
                     except Exception as e:
                         log_error(f"Error inserting document from {source_url}: {e}", exc_info=True)
                         continue
@@ -1963,7 +1967,9 @@ class Knowledge(RemoteKnowledge):
                         continue
                 else:
                     try:
-                        self.vector_db.insert(doc_hash, documents=source_docs, filters=_filters_from_metadata(content.metadata))
+                        self.vector_db.insert(
+                            doc_hash, documents=source_docs, filters=_filters_from_metadata(content.metadata)
+                        )
                     except Exception as e:
                         log_error(f"Error inserting document from {source_url}: {e}", exc_info=True)
                         continue
@@ -2634,7 +2640,9 @@ class Knowledge(RemoteKnowledge):
 
         if self.vector_db.upsert_available() and upsert:
             try:
-                await self.vector_db.async_upsert(content.content_hash, read_documents, _filters_from_metadata(content.metadata))  # type: ignore[arg-type]
+                await self.vector_db.async_upsert(
+                    content.content_hash, read_documents, _filters_from_metadata(content.metadata)
+                )  # type: ignore[arg-type]
             except Exception as e:
                 log_error(f"Error upserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
