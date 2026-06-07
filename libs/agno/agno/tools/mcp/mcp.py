@@ -611,7 +611,7 @@ class MCPTools(Toolkit):
                 if self._session_context is not None:
                     try:
                         await self._session_context.__aexit__(None, None, None)
-                    except (RuntimeError, Exception):
+                    except BaseException:
                         pass  # Silently ignore cleanup errors
                     self.session = None
                     self._session_context = None
@@ -619,7 +619,7 @@ class MCPTools(Toolkit):
                 if self._context is not None:
                     try:
                         await self._context.__aexit__(None, None, None)
-                    except (RuntimeError, Exception):
+                    except BaseException:
                         pass  # Silently ignore cleanup errors
                     self._context = None
             except BaseException:

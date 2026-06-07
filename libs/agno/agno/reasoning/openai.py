@@ -18,13 +18,7 @@ def is_openai_reasoning_model(reasoning_model: Model) -> bool:
             or reasoning_model.__class__.__name__ == "OpenAIResponses"
             or reasoning_model.__class__.__name__ == "AzureOpenAI"
         )
-        and (
-            ("o4" in reasoning_model.id)
-            or ("o3" in reasoning_model.id)
-            or ("o1" in reasoning_model.id)
-            or ("5.1" in reasoning_model.id)
-            or ("5.2" in reasoning_model.id)
-        )
+        and reasoning_model.id.startswith(("o1", "o3", "o4", "5.1", "5.2"))
     ) or (
         isinstance(reasoning_model, OpenAILike)
         and (
