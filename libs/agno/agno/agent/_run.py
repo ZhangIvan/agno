@@ -133,7 +133,6 @@ def _user_message_prefix(agent: Agent, run_messages: RunMessages):
         if original is not None and run_messages.user_message is not None:
             run_messages.user_message.content = original
 
-
 # Cancel raises immediately on every event. Only terminal events bypass so the
 # run's own cancel handler can yield them to the stream.
 _CANCEL_BYPASS_EVENT_TYPES = (
