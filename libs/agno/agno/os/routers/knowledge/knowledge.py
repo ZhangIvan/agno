@@ -1183,7 +1183,7 @@ def attach_routes(router: APIRouter, knowledge_instances: List[Union[Knowledge, 
                                     "id": "vector_db_1",
                                     "name": "Vector DB 1",
                                     "description": "Vector DB 1 description",
-                                    "search_types": ["vector", "keyword", "hybrid"],
+                                    "search_types": ["vector", "keyword", "hybrid", "grep"],
                                 }
                             ],
                             "filters": ["filter_tag_1", "filter_tag2"],

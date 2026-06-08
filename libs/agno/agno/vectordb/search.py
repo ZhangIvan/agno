@@ -5,3 +5,4 @@ class SearchType(str, Enum):
     vector = "vector"
     keyword = "keyword"
     hybrid = "hybrid"
+    grep = "grep"

@@ -822,6 +822,8 @@ class PgVector(VectorDb):
             return self.keyword_search(query=query, limit=limit, filters=filters)
         elif self.search_type == SearchType.hybrid:
             return self.hybrid_search(query=query, limit=limit, filters=filters)
+        elif self.search_type == SearchType.grep:
+            return self.grep_search(query=query, limit=limit, filters=filters)
         else:
             log_error(f"Invalid search type '{self.search_type}'.")
             return []
@@ -1272,6 +1274,140 @@ class PgVector(VectorDb):
             log_error(f"Error during hybrid search: {str(e)}")
             return []
 
+    def grep_search(
+        self,
+        query: str,
+        limit: int = 5,
+        filters: Optional[Union[Dict[str, Any], List[FilterExpr]]] = None,
+    ) -> List[Document]:
+        """
+        Perform a grep-style hybrid search combining vector similarity
+        with pg_trgm trigram text matching.
+
+        Uses ``similarity(content, query)`` from the pg_trgm extension which
+        naturally handles Chinese, English, and other languages without
+        language-specific tokenisation.
+
+        Args:
+            query (str): The search query.
+            limit (int): Maximum number of results to return.
+            filters (Optional[Union[Dict[str, Any], List[FilterExpr]]]): Filters to apply.
+
+        Returns:
+            List[Document]: List of matching documents.
+        """
+        try:
+            # Ensure pg_trgm extension and GIN trigram index are available
+            self._ensure_pgtrgm_extension()
+
+            # Get the embedding for the query string
+            query_embedding = self.embedder.get_embedding(query)
+            if query_embedding is None:
+                log_error(f"Error getting embedding for Query: {query}")
+                return []
+
+            # Define the columns to select
+            columns = [
+                self.table.c.id,
+                self.table.c.name,
+                self.table.c.meta_data,
+                self.table.c.content,
+                self.table.c.embedding,
+                self.table.c.usage,
+            ]
+
+            # === TRIGRAM TEXT SEARCH COMPONENT ===
+            # similarity() returns 0.0-1.0 based on trigram overlap.
+            # Already normalized -- no additional scaling needed.
+            grep_score = func.similarity(self.table.c.content, bindparam("query", value=query))
+
+            # === VECTOR SIMILARITY COMPONENT ===
+            if self.distance == Distance.l2:
+                vector_distance = self.table.c.embedding.l2_distance(query_embedding)
+                vector_score = 1 / (1 + vector_distance)
+            elif self.distance == Distance.cosine:
+                vector_distance = self.table.c.embedding.cosine_distance(query_embedding)
+                vector_score = func.greatest(0.0, 1 - vector_distance)
+            elif self.distance == Distance.max_inner_product:
+                negative_ip = self.table.c.embedding.max_inner_product(query_embedding)
+                inner_product = -negative_ip
+                vector_score = func.greatest(0.0, func.least(1.0, (inner_product + 1) / 2))
+            else:
+                log_error(f"Unknown distance metric: {self.distance}")
+                return []
+
+            # Apply weights to control the influence of each score
+            if not 0 <= self.vector_score_weight <= 1:
+                raise ValueError("vector_score_weight must be between 0 and 1")
+            text_weight = 1 - self.vector_score_weight
+
+            # Combine the scores
+            combined_score = (self.vector_score_weight * vector_score) + (text_weight * grep_score)
+
+            # Build the statement
+            stmt = select(*columns, combined_score.label("hybrid_score"))
+
+            # Apply filters if provided
+            if filters is not None:
+                if isinstance(filters, dict):
+                    stmt = stmt.where(self.table.c.meta_data.contains(filters))
+                else:
+                    sqlalchemy_conditions = [
+                        self._dsl_to_sqlalchemy(f.to_dict() if hasattr(f, "to_dict") else f, self.table)
+                        for f in filters
+                    ]
+                    stmt = stmt.where(and_(*sqlalchemy_conditions))
+
+            if self.similarity_threshold is not None:
+                stmt = stmt.where(combined_score >= self.similarity_threshold)
+
+            # Order by the combined score
+            stmt = stmt.order_by(desc("hybrid_score"))
+            stmt = stmt.limit(limit)
+
+            log_debug(f"Grep search query: {stmt}")
+
+            # Execute the query
+            try:
+                with self.Session() as sess, sess.begin():
+                    if self.vector_index is not None:
+                        if isinstance(self.vector_index, Ivfflat):
+                            sess.execute(text(f"SET LOCAL ivfflat.probes = {self.vector_index.probes}"))
+                        elif isinstance(self.vector_index, HNSW):
+                            sess.execute(text(f"SET LOCAL hnsw.ef_search = {self.vector_index.ef_search}"))
+                    results = sess.execute(stmt).fetchall()
+            except Exception as e:
+                log_error(f"Error performing grep search: {str(e)}")
+                return []
+
+            # Map results to Document objects
+            search_results: List[Document] = []
+            for result in results:
+                meta_data = dict(result.meta_data) if result.meta_data else {}
+                meta_data["similarity_score"] = float(result.hybrid_score)
+
+                search_results.append(
+                    Document(
+                        id=result.id,
+                        name=result.name,
+                        meta_data=meta_data,
+                        content=result.content,
+                        embedder=self.embedder,
+                        embedding=result.embedding,
+                        usage=result.usage,
+                    )
+                )
+
+            if self.reranker and len(search_results):
+                search_results = self.reranker.rerank(query=query, documents=search_results)
+
+            log_info(f"Found {len(search_results)} documents")
+
+            return search_results
+        except Exception as e:
+            log_error(f"Error during grep search: {str(e)}")
+            return []
+
     def drop(self) -> None:
         """
         Drop the table from the database.
@@ -1330,7 +1466,42 @@ class PgVector(VectorDb):
         log_debug("==== Optimizing Vector DB ====")
         self._create_vector_index(force_recreate=force_recreate)
         self._create_gin_index(force_recreate=force_recreate)
+        self._ensure_pgtrgm_extension()
         log_debug("==== Optimized Vector DB ====")
+
+    # Class-level flag: pg_trgm setup runs once per process
+    _pgtrgm_ready: bool = False
+
+    def _ensure_pgtrgm_extension(self) -> None:
+        """Ensure the pg_trgm extension and GIN trigram index exist.
+
+        Called lazily on first grep_search invocation and during optimize().
+        Laziness avoids breaking existing deployments that lack the extension.
+        """
+        if self.__class__._pgtrgm_ready:
+            return
+
+        try:
+            trgm_index_name = f"idx_{self.table_name}_content_trgm"
+            if self._index_exists(trgm_index_name):
+                self.__class__._pgtrgm_ready = True
+                return
+
+            with self.Session() as sess, sess.begin():
+                sess.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+                create_trgm_sql = text(
+                    f'CREATE INDEX IF NOT EXISTS "{trgm_index_name}" '
+                    f"ON {self.table.fullname} "
+                    f"USING GIN (content gin_trgm_ops)"
+                )
+                sess.execute(create_trgm_sql)
+                log_info(f"Created GIN trigram index '{trgm_index_name}'")
+
+            self.__class__._pgtrgm_ready = True
+
+        except Exception as e:
+            log_error(f"Failed to set up pg_trgm extension/index: {e}")
+            # Non-fatal: search still works without the index (slower sequential scan)
 
     def _index_exists(self, index_name: str) -> bool:
         """
@@ -1652,4 +1823,4 @@ class PgVector(VectorDb):
         return copied_obj
 
     def get_supported_search_types(self) -> List[str]:
-        return [SearchType.vector, SearchType.keyword, SearchType.hybrid]
+        return [SearchType.vector, SearchType.keyword, SearchType.hybrid, SearchType.grep]
