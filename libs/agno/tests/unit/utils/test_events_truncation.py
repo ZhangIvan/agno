@@ -2,21 +2,20 @@
 
 import json
 
+from agno.models.response import ToolExecution
 from agno.utils.events import (
+    _GENERIC_RESULT_THRESHOLD,
+    _KNOWLEDGE_RESULT_THRESHOLD,
+    _KNOWLEDGE_TOOL_NAMES,
+    _MAX_JSON_PARSE_SIZE,
+    _TOOL_RESULT_THRESHOLD,
     _format_size,
     _make_summary,
     _summarize_result,
+    _tool_event_without_result,
     _truncate_generic_result,
     _truncate_strings,
-    _tool_event_without_result,
-    _KNOWLEDGE_TOOL_NAMES,
-    _MAX_JSON_PARSE_SIZE,
-    _KNOWLEDGE_RESULT_THRESHOLD,
-    _GENERIC_RESULT_THRESHOLD,
-    _TOOL_RESULT_THRESHOLD,
 )
-from agno.models.response import ToolExecution
-
 
 # ============================================================
 # _format_size

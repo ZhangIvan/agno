@@ -3,15 +3,14 @@
 import json
 
 from agno.os.utils import (
-    get_session_name,
-    extract_input_media,
-    _extract_session_name_from_content,
-    _session_name_from_input,
-    _normalize_run,
     _REFERENCE_MARKERS,
     _SESSION_NAME_MAX_LENGTH,
+    _extract_session_name_from_content,
+    _normalize_run,
+    _session_name_from_input,
+    extract_input_media,
+    get_session_name,
 )
-
 
 # ============================================================
 # _extract_session_name_from_content
@@ -28,7 +27,7 @@ def test_extract_empty():
 
 
 def test_extract_strips_references():
-    content = "看看斯贝利单抗的机制是什么\n\nUse the following references from the knowledge base if it helps:\n<references>\n[{\"content\": \"...huge doc...\"}]"
+    content = '看看斯贝利单抗的机制是什么\n\nUse the following references from the knowledge base if it helps:\n<references>\n[{"content": "...huge doc..."}]'
     result = _extract_session_name_from_content(content)
     assert result == "看看斯贝利单抗的机制是什么"
     assert "references" not in result
@@ -191,33 +190,37 @@ def test_session_name_from_session_data():
 
 
 def test_session_name_from_user_message():
-    session = _make_session(runs=[
-        {
-            "messages": [
-                {"role": "system", "content": "You are a helper"},
-                {"role": "user", "content": "Ask about IgA nephropathy"},
-            ]
-        }
-    ])
+    session = _make_session(
+        runs=[
+            {
+                "messages": [
+                    {"role": "system", "content": "You are a helper"},
+                    {"role": "user", "content": "Ask about IgA nephropathy"},
+                ]
+            }
+        ]
+    )
     assert get_session_name(session) == "Ask about IgA nephropathy"
 
 
 def test_session_name_strips_references_from_message():
-    session = _make_session(runs=[
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": (
-                        "查看药物机制\n\n"
-                        "Use the following references from the knowledge base if it helps:\n"
-                        "<references>\n[{\"content\": \"50KB of docs\"}]\n"
-                        "</references>"
-                    ),
-                },
-            ]
-        }
-    ])
+    session = _make_session(
+        runs=[
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "查看药物机制\n\n"
+                            "Use the following references from the knowledge base if it helps:\n"
+                            '<references>\n[{"content": "50KB of docs"}]\n'
+                            "</references>"
+                        ),
+                    },
+                ]
+            }
+        ]
+    )
     result = get_session_name(session)
     assert result == "查看药物机制"
     assert "references" not in result
@@ -235,46 +238,59 @@ def test_session_name_no_runs():
 
 def test_session_name_from_run_input():
     """When no user message, fall back to run input."""
-    session = _make_session(runs=[
-        {
-            "messages": [],
-            "input": {"role": "user", "content": "Fallback query"},
-        }
-    ])
+    session = _make_session(
+        runs=[
+            {
+                "messages": [],
+                "input": {"role": "user", "content": "Fallback query"},
+            }
+        ]
+    )
     result = get_session_name(session)
     assert result == "Fallback query"
 
 
 def test_session_name_team_filters_agent_runs():
     """Team sessions should only use team runs (no agent_id)."""
-    session = _make_session(session_type="team", runs=[
-        {"agent_id": "agent_1", "messages": [{"role": "user", "content": "Agent run"}]},
-        {"messages": [{"role": "user", "content": "Team run query"}]},
-    ])
+    session = _make_session(
+        session_type="team",
+        runs=[
+            {"agent_id": "agent_1", "messages": [{"role": "user", "content": "Agent run"}]},
+            {"messages": [{"role": "user", "content": "Team run query"}]},
+        ],
+    )
     result = get_session_name(session)
     assert result == "Team run query"
 
 
 def test_session_name_workflow_string_input():
-    session = _make_session(session_type="workflow", runs=[
-        {"input": "My workflow input"},
-    ])
+    session = _make_session(
+        session_type="workflow",
+        runs=[
+            {"input": "My workflow input"},
+        ],
+    )
     assert get_session_name(session) == "My workflow input"
 
 
 def test_session_name_workflow_dict_input():
-    session = _make_session(session_type="workflow", runs=[
-        {"input": {"topic": "AI", "style": "formal"}},
-    ])
+    session = _make_session(
+        session_type="workflow",
+        runs=[
+            {"input": {"topic": "AI", "style": "formal"}},
+        ],
+    )
     result = get_session_name(session)
     parsed = json.loads(result)
     assert parsed["topic"] == "AI"
 
 
 def test_session_name_long_user_message_truncated():
-    session = _make_session(runs=[
-        {"messages": [{"role": "user", "content": "x" * 200}]},
-    ])
+    session = _make_session(
+        runs=[
+            {"messages": [{"role": "user", "content": "x" * 200}]},
+        ]
+    )
     result = get_session_name(session)
     assert len(result) == _SESSION_NAME_MAX_LENGTH
     assert result.endswith("...")
@@ -290,9 +306,11 @@ def test_session_name_real_world_knowledge_pollution():
         '{"content": "another huge doc...", "name": "doc2.pdf"}]\n'
         "</references>"
     )
-    session = _make_session(runs=[
-        {"messages": [{"role": "user", "content": content}]},
-    ])
+    session = _make_session(
+        runs=[
+            {"messages": [{"role": "user", "content": content}]},
+        ]
+    )
     result = get_session_name(session)
     assert result == "看看斯贝利单抗的机制是什么"
     assert len(result) < 50

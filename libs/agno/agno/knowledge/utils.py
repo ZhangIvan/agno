@@ -3,7 +3,7 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlparse, unquote
+from urllib.parse import unquote, urlparse
 
 from agno.knowledge.reader.base import Reader
 from agno.knowledge.reader.reader_factory import ReaderFactory

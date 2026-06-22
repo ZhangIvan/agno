@@ -6,7 +6,6 @@ import pytest
 from agno.exceptions import ModelAuthenticationError
 from agno.models.volcengine import Ark
 
-
 # ============================================================
 # Initialization & auth
 # ============================================================
