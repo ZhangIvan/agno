@@ -127,11 +127,11 @@ def create_knowledge_search_tool(
         if agent.references_format == "json":
             import json
 
-            return json.dumps(output_docs, ensure_ascii=False)
+            return json.dumps(output_docs, indent=2, default=str, ensure_ascii=False)
         else:
             import yaml
 
-            return yaml.dump(output_docs, default_flow_style=False)
+            return yaml.dump(output_docs, default_flow_style=False, allow_unicode=True)
 
     # Per-run bounded dedup — prevents context bloat from repeated docs across calls
     _MAX_DOC_HASHES = 200

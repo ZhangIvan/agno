@@ -81,9 +81,9 @@ def convert_documents_to_string(agent: Agent, docs: List[Union[Dict[str, Any], s
     if agent.references_format == "yaml":
         import yaml
 
-        return yaml.dump(output_docs)
+        return yaml.dump(output_docs, allow_unicode=True)
 
-    return json.dumps(output_docs, ensure_ascii=False)
+    return json.dumps(output_docs, indent=2, ensure_ascii=False)
 
 
 def convert_dependencies_to_string(agent: Agent, context: Dict[str, Any]) -> str:
@@ -100,7 +100,6 @@ def convert_dependencies_to_string(agent: Agent, context: Dict[str, Any]) -> str
         return ""
 
     try:
-        # 保留中文
         return json.dumps(context, indent=2, default=str, ensure_ascii=False)
     except (TypeError, ValueError, OverflowError) as e:
         log_warning(f"Failed to convert context to JSON: {str(e)}")
