@@ -15,6 +15,7 @@ from httpx import AsyncClient
 
 from agno.db.base import AsyncBaseDb, BaseDb
 from agno.db.schemas.knowledge import KnowledgeRow
+from agno.exceptions import KnowledgeSearchError, VectorDbSearchError
 from agno.filters import EQ, FilterExpr
 from agno.knowledge.content import Content, ContentAuth, ContentStatus, FileData
 from agno.knowledge.document import Document
@@ -85,6 +86,10 @@ class Knowledge(RemoteKnowledge):
     # Requires re-indexing existing data to add linked_to metadata.
     # Default is False for backwards compatibility with existing data.
     isolate_vector_search: bool = False
+    # Fail closed for published/read-only retrieval. In this mode initialization
+    # never probes or creates vector database objects, and search errors propagate
+    # as stable Agno domain errors instead of being converted to empty results.
+    strict_retrieval: bool = False
 
     # --- Page image retrieval settings ---
     # When True, retrieved text chunks are replaced by their corresponding page images
@@ -131,7 +136,10 @@ class Knowledge(RemoteKnowledge):
             for attr in ("page_image_storage", "upload_concurrency", "url_signature_expires"):
                 setattr(self.vector_db, attr, getattr(self, attr))
 
-        if self.vector_db and not self.vector_db.exists():
+        if self.strict_retrieval and self.vector_db is not None and hasattr(self.vector_db, "strict_search"):
+            self.vector_db.strict_search = True
+
+        if self.vector_db and not self.strict_retrieval and not self.vector_db.exists():
             self.vector_db.create()
 
         self.construct_readers()
@@ -595,9 +603,18 @@ class Knowledge(RemoteKnowledge):
             and isinstance(self.vector_db.search_type, SearchType)
             and search_type
         ):
-            self.vector_db.search_type = SearchType(search_type)
+            try:
+                self.vector_db.search_type = SearchType(search_type)
+            except Exception:
+                if self.strict_retrieval:
+                    log_error("Knowledge search failed")
+                    raise KnowledgeSearchError() from None
+                raise
         try:
             if self.vector_db is None:
+                if self.strict_retrieval:
+                    log_error("Knowledge search failed")
+                    raise KnowledgeSearchError() from None
                 log_warning("No vector db provided")
                 return []
 
@@ -612,9 +629,22 @@ class Knowledge(RemoteKnowledge):
                     search_filters = [EQ("linked_to", self.name), *search_filters]
 
             _max_results = max_results or self.max_results
-            log_debug(f"Getting {_max_results} relevant documents for query: {query}")
+            if self.strict_retrieval:
+                log_debug(f"Getting {_max_results} relevant documents")
+            else:
+                log_debug(f"Getting {_max_results} relevant documents for query: {query}")
             return self.vector_db.search(query=query, limit=_max_results, filters=search_filters)
+        except KnowledgeSearchError:
+            raise
+        except VectorDbSearchError:
+            if self.strict_retrieval:
+                log_error("Knowledge search failed")
+                raise KnowledgeSearchError() from None
+            raise
         except Exception as e:
+            if self.strict_retrieval:
+                log_error("Knowledge search failed")
+                raise KnowledgeSearchError() from None
             log_error(f"Error searching for documents: {e}", exc_info=True)
             return []
 
@@ -635,9 +665,18 @@ class Knowledge(RemoteKnowledge):
             and isinstance(self.vector_db.search_type, SearchType)
             and search_type
         ):
-            self.vector_db.search_type = SearchType(search_type)
+            try:
+                self.vector_db.search_type = SearchType(search_type)
+            except Exception:
+                if self.strict_retrieval:
+                    log_error("Knowledge search failed")
+                    raise KnowledgeSearchError() from None
+                raise
         try:
             if self.vector_db is None:
+                if self.strict_retrieval:
+                    log_error("Knowledge search failed")
+                    raise KnowledgeSearchError() from None
                 log_warning("No vector db provided")
                 return []
 
@@ -652,13 +691,28 @@ class Knowledge(RemoteKnowledge):
                     search_filters = [EQ("linked_to", self.name), *search_filters]
 
             _max_results = max_results or self.max_results
-            log_debug(f"Getting {_max_results} relevant documents for query: {query}")
+            if self.strict_retrieval:
+                log_debug(f"Getting {_max_results} relevant documents")
+            else:
+                log_debug(f"Getting {_max_results} relevant documents for query: {query}")
             try:
                 return await self.vector_db.async_search(query=query, limit=_max_results, filters=search_filters)
             except NotImplementedError:
+                if self.strict_retrieval:
+                    raise
                 log_info("Vector db does not support async search")
                 return self.vector_db.search(query=query, limit=_max_results, filters=search_filters)
+        except KnowledgeSearchError:
+            raise
+        except VectorDbSearchError:
+            if self.strict_retrieval:
+                log_error("Knowledge search failed")
+                raise KnowledgeSearchError() from None
+            raise
         except Exception as e:
+            if self.strict_retrieval:
+                log_error("Knowledge search failed")
+                raise KnowledgeSearchError() from None
             log_error(f"Error searching for documents: {e}", exc_info=True)
             return []
 

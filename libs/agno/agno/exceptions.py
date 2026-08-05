@@ -78,6 +78,24 @@ class AgnoError(Exception):
         return str(self.message)
 
 
+class KnowledgeSearchError(AgnoError):
+    """Raised when strict knowledge retrieval cannot complete safely."""
+
+    def __init__(self, message: str = "Knowledge search failed", status_code: int = 503):
+        super().__init__(message, status_code)
+        self.type = "knowledge_search_error"
+        self.error_id = "knowledge_search_error"
+
+
+class VectorDbSearchError(AgnoError):
+    """Raised when a strict vector database search cannot complete safely."""
+
+    def __init__(self, message: str = "Vector database search failed", status_code: int = 503):
+        super().__init__(message, status_code)
+        self.type = "vector_db_search_error"
+        self.error_id = "vector_db_search_error"
+
+
 class ModelAuthenticationError(AgnoError):
     """Raised when model authentication fails."""
 

@@ -2,8 +2,9 @@ import asyncio
 import re
 from hashlib import md5
 from math import sqrt
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, NoReturn, Optional, Union, cast
 
+from agno.exceptions import VectorDbSearchError
 from agno.knowledge.utils import _filters_from_metadata
 from agno.utils.string import generate_id
 
@@ -67,6 +68,8 @@ class PgVector(VectorDb):
         reranker: Optional[Reranker] = None,
         create_schema: bool = True,
         similarity_threshold: Optional[float] = None,
+        strict_search: bool = False,
+        statement_timeout_ms: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -92,12 +95,26 @@ class PgVector(VectorDb):
             create_schema (bool): Whether to automatically create the database schema if it doesn't exist.
                 Set to False if schema is managed externally (e.g., via migrations). Defaults to True.
             similarity_threshold (Optional[float]): Minimum similarity score (0.0-1.0) to filter results.
+            strict_search (bool): Fail closed during retrieval, suppress sensitive error details,
+                and prohibit search-triggered DDL. Defaults to False for backwards compatibility.
+            statement_timeout_ms (Optional[int]): PostgreSQL transaction-local statement timeout
+                applied to each strict search query. Ignored unless strict_search is True.
         """
         if not table_name:
             raise ValueError("Table name must be provided.")
 
         if db_engine is None and db_url is None:
             raise ValueError("Either 'db_url' or 'db_engine' must be provided.")
+
+        if not isinstance(strict_search, bool):
+            raise ValueError("strict_search must be a boolean")
+        if statement_timeout_ms is not None and (
+            isinstance(statement_timeout_ms, bool)
+            or not isinstance(statement_timeout_ms, int)
+            or statement_timeout_ms <= 0
+            or statement_timeout_ms > 2_147_483_647
+        ):
+            raise ValueError("statement_timeout_ms must be an integer between 1 and 2147483647")
 
         if id is None:
             base_seed = db_url or str(db_engine.url)  # type: ignore
@@ -160,6 +177,10 @@ class PgVector(VectorDb):
         # Schema creation flag
         self.create_schema: bool = create_schema
 
+        # Published/read-only retrieval controls
+        self.strict_search: bool = strict_search
+        self.statement_timeout_ms: Optional[int] = statement_timeout_ms
+
         # Database session
         self.Session: scoped_session = scoped_session(sessionmaker(bind=self.db_engine))
         # Database table
@@ -211,6 +232,25 @@ class PgVector(VectorDb):
         else:
             raise NotImplementedError(f"Unsupported schema version: {self.schema_version}")
 
+    def _raise_strict_search_error(self, operation: str = "Vector database search") -> NoReturn:
+        """Raise a stable, sanitized error for strict retrieval failures."""
+        log_error(f"{operation} failed")
+        raise VectorDbSearchError() from None
+
+    def _apply_strict_search_settings(self, sess: Session) -> None:
+        """Apply transaction-local controls before a strict PostgreSQL query."""
+        if self.strict_search and self.statement_timeout_ms is not None:
+            sess.execute(
+                text("SELECT set_config('statement_timeout', :statement_timeout, true)"),
+                {"statement_timeout": f"{self.statement_timeout_ms}ms"},
+            )
+
+    def _assert_ddl_allowed(self) -> None:
+        """Prevent explicit or implicit DDL on strict read-only instances."""
+        if self.strict_search:
+            log_error("Database DDL is disabled in strict search mode")
+            raise VectorDbSearchError("Database DDL is disabled in strict search mode") from None
+
     def table_exists(self) -> bool:
         """
         Check if the table exists in the database.
@@ -229,6 +269,7 @@ class PgVector(VectorDb):
         """
         Create the table if it does not exist.
         """
+        self._assert_ddl_allowed()
         if not self.table_exists():
             with self.Session() as sess, sess.begin():
                 log_debug("Creating extension: vector")
@@ -825,6 +866,8 @@ class PgVector(VectorDb):
         elif self.search_type == SearchType.grep:
             return self.grep_search(query=query, limit=limit, filters=filters)
         else:
+            if self.strict_search:
+                self._raise_strict_search_error()
             log_error(f"Invalid search type '{self.search_type}'.")
             return []
 
@@ -873,6 +916,8 @@ class PgVector(VectorDb):
             # Get the embedding for the query string
             query_embedding = self.embedder.get_embedding(query)
             if query_embedding is None:
+                if self.strict_search:
+                    self._raise_strict_search_error("Vector search")
                 log_error(f"Error getting embedding for Query: {query}")
                 return []
 
@@ -883,6 +928,8 @@ class PgVector(VectorDb):
             elif self.distance == Distance.max_inner_product:
                 distance_expr = self.table.c.embedding.max_inner_product(query_embedding)
             else:
+                if self.strict_search:
+                    self._raise_strict_search_error("Vector search")
                 log_error(f"Unknown distance metric: {self.distance}")
                 return []
 
@@ -929,11 +976,15 @@ class PgVector(VectorDb):
             stmt = stmt.limit(limit)
 
             # Log the query for debugging
-            log_debug(f"Vector search query: {stmt}")
+            if self.strict_search:
+                log_debug("Executing vector search query")
+            else:
+                log_debug(f"Vector search query: {stmt}")
 
             # Execute the query
             try:
                 with self.Session() as sess, sess.begin():
+                    self._apply_strict_search_settings(sess)
                     if self.vector_index is not None:
                         if isinstance(self.vector_index, Ivfflat):
                             sess.execute(text(f"SET LOCAL ivfflat.probes = {self.vector_index.probes}"))
@@ -941,6 +992,8 @@ class PgVector(VectorDb):
                             sess.execute(text(f"SET LOCAL hnsw.ef_search = {self.vector_index.ef_search}"))
                     results = sess.execute(stmt).fetchall()
             except Exception as e:
+                if self.strict_search:
+                    self._raise_strict_search_error("Vector search")
                 log_error(f"Error performing semantic search: {str(e)}")
                 log_error(f"Table might not exist, creating for future use: {str(e)}")
                 self.create()
@@ -971,7 +1024,11 @@ class PgVector(VectorDb):
 
             log_info(f"Found {len(search_results)} documents")
             return search_results
+        except VectorDbSearchError:
+            raise
         except Exception as e:
+            if self.strict_search:
+                self._raise_strict_search_error("Vector search")
             log_error(f"Error during vector search: {str(e)}")
             return []
 
@@ -1083,13 +1140,19 @@ class PgVector(VectorDb):
             stmt = stmt.limit(limit)
 
             # Log the query for debugging
-            log_debug(f"Keyword search query: {stmt}")
+            if self.strict_search:
+                log_debug("Executing keyword search query")
+            else:
+                log_debug(f"Keyword search query: {stmt}")
 
             # Execute the query
             try:
                 with self.Session() as sess, sess.begin():
+                    self._apply_strict_search_settings(sess)
                     results = sess.execute(stmt).fetchall()
             except Exception as e:
+                if self.strict_search:
+                    self._raise_strict_search_error("Keyword search")
                 log_error(f"Error performing keyword search: {str(e)}")
                 log_error(f"Table might not exist, creating for future use: {str(e)}")
                 self.create()
@@ -1112,7 +1175,11 @@ class PgVector(VectorDb):
 
             log_info(f"Found {len(search_results)} documents")
             return search_results
+        except VectorDbSearchError:
+            raise
         except Exception as e:
+            if self.strict_search:
+                self._raise_strict_search_error("Keyword search")
             log_error(f"Error during keyword search: {str(e)}")
             return []
 
@@ -1137,6 +1204,8 @@ class PgVector(VectorDb):
             # Get the embedding for the query string
             query_embedding = self.embedder.get_embedding(query)
             if query_embedding is None:
+                if self.strict_search:
+                    self._raise_strict_search_error("Hybrid search")
                 log_error(f"Error getting embedding for Query: {query}")
                 return []
 
@@ -1190,6 +1259,8 @@ class PgVector(VectorDb):
                 # Normalize to range [0, 1]
                 vector_score = func.greatest(0.0, func.least(1.0, (inner_product + 1) / 2))
             else:
+                if self.strict_search:
+                    self._raise_strict_search_error("Hybrid search")
                 log_error(f"Unknown distance metric: {self.distance}")
                 return []
 
@@ -1232,11 +1303,15 @@ class PgVector(VectorDb):
             stmt = stmt.limit(limit)
 
             # Log the query for debugging
-            log_debug(f"Hybrid search query: {stmt}")
+            if self.strict_search:
+                log_debug("Executing hybrid search query")
+            else:
+                log_debug(f"Hybrid search query: {stmt}")
 
             # Execute the query
             try:
                 with self.Session() as sess, sess.begin():
+                    self._apply_strict_search_settings(sess)
                     if self.vector_index is not None:
                         if isinstance(self.vector_index, Ivfflat):
                             sess.execute(text(f"SET LOCAL ivfflat.probes = {self.vector_index.probes}"))
@@ -1244,6 +1319,8 @@ class PgVector(VectorDb):
                             sess.execute(text(f"SET LOCAL hnsw.ef_search = {self.vector_index.ef_search}"))
                     results = sess.execute(stmt).fetchall()
             except Exception as e:
+                if self.strict_search:
+                    self._raise_strict_search_error("Hybrid search")
                 log_error(f"Error performing hybrid search: {str(e)}")
                 return []
 
@@ -1270,7 +1347,11 @@ class PgVector(VectorDb):
             log_info(f"Found {len(search_results)} documents")
 
             return search_results
+        except VectorDbSearchError:
+            raise
         except Exception as e:
+            if self.strict_search:
+                self._raise_strict_search_error("Hybrid search")
             log_error(f"Error during hybrid search: {str(e)}")
             return []
 
@@ -1298,11 +1379,14 @@ class PgVector(VectorDb):
         """
         try:
             # Ensure pg_trgm extension and GIN trigram index are available
-            self._ensure_pgtrgm_extension()
+            if not self.strict_search:
+                self._ensure_pgtrgm_extension()
 
             # Get the embedding for the query string
             query_embedding = self.embedder.get_embedding(query)
             if query_embedding is None:
+                if self.strict_search:
+                    self._raise_strict_search_error("Grep search")
                 log_error(f"Error getting embedding for Query: {query}")
                 return []
 
@@ -1333,6 +1417,8 @@ class PgVector(VectorDb):
                 inner_product = -negative_ip
                 vector_score = func.greatest(0.0, func.least(1.0, (inner_product + 1) / 2))
             else:
+                if self.strict_search:
+                    self._raise_strict_search_error("Grep search")
                 log_error(f"Unknown distance metric: {self.distance}")
                 return []
 
@@ -1365,11 +1451,15 @@ class PgVector(VectorDb):
             stmt = stmt.order_by(desc("hybrid_score"))
             stmt = stmt.limit(limit)
 
-            log_debug(f"Grep search query: {stmt}")
+            if self.strict_search:
+                log_debug("Executing grep search query")
+            else:
+                log_debug(f"Grep search query: {stmt}")
 
             # Execute the query
             try:
                 with self.Session() as sess, sess.begin():
+                    self._apply_strict_search_settings(sess)
                     if self.vector_index is not None:
                         if isinstance(self.vector_index, Ivfflat):
                             sess.execute(text(f"SET LOCAL ivfflat.probes = {self.vector_index.probes}"))
@@ -1377,6 +1467,8 @@ class PgVector(VectorDb):
                             sess.execute(text(f"SET LOCAL hnsw.ef_search = {self.vector_index.ef_search}"))
                     results = sess.execute(stmt).fetchall()
             except Exception as e:
+                if self.strict_search:
+                    self._raise_strict_search_error("Grep search")
                 log_error(f"Error performing grep search: {str(e)}")
                 return []
 
@@ -1404,7 +1496,11 @@ class PgVector(VectorDb):
             log_info(f"Found {len(search_results)} documents")
 
             return search_results
+        except VectorDbSearchError:
+            raise
         except Exception as e:
+            if self.strict_search:
+                self._raise_strict_search_error("Grep search")
             log_error(f"Error during grep search: {str(e)}")
             return []
 
@@ -1412,6 +1508,7 @@ class PgVector(VectorDb):
         """
         Drop the table from the database.
         """
+        self._assert_ddl_allowed()
         if self.table_exists():
             try:
                 log_debug(f"Dropping table '{self.table.fullname}'.")
@@ -1463,6 +1560,7 @@ class PgVector(VectorDb):
         Args:
             force_recreate (bool): If True, existing indexes will be dropped and recreated.
         """
+        self._assert_ddl_allowed()
         log_debug("==== Optimizing Vector DB ====")
         self._create_vector_index(force_recreate=force_recreate)
         self._create_gin_index(force_recreate=force_recreate)
@@ -1478,6 +1576,8 @@ class PgVector(VectorDb):
         Called lazily on first grep_search invocation and during optimize().
         Laziness avoids breaking existing deployments that lack the extension.
         """
+        if self.strict_search:
+            return
         if self.__class__._pgtrgm_ready:
             return
 
