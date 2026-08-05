@@ -29,6 +29,115 @@
 
 **结论**：真正"有用"的新东西是 Service Accounts 与 MCP OAuth（跟本项目重度使用的 AgentOS 相关），entity memory 重写虽不是"新功能"但影响面最大、已验证测试通过。FileSystem / scorer / Valkey / OpenSearch 对当前项目没有直接帮助，合并只是顺带带入代码，不需要额外投入。
 
+### 1.1 怎么用：Service Accounts（机器对机器调用 AgentOS）
+
+给脚本/CI/其他后端服务发一个不依赖用户登录的 API token，权限可控、可撤销。分两步：
+
+**第一步，AgentOS 开启授权**（前提是已经配置了 JWT 鉴权，Service Accounts 是在这个基础上加的一条平行通道）：
+
+```python
+from agno.os import AgentOS
+from agno.os.config import AuthorizationConfig
+
+agent_os = AgentOS(
+    agents=[my_agent],
+    db=db,
+    authorization=True,
+    authorization_config=AuthorizationConfig(
+        verification_keys=[JWT_SECRET],
+        algorithm="HS256",
+        verify_audience=True,
+    ),
+)
+```
+
+**第二步，用管理员 JWT 创建一个 service account**（拿到的 `token` 只在创建响应里出现这一次，数据库只存 hash，务必当场保存）：
+
+```bash
+curl -X POST http://localhost:7777/service-accounts \
+  -H "Authorization: Bearer <管理员JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "ci-runner"}'
+# 响应里的 token 形如 agno_pat_xxxxxxxx，之后用它替代JWT调用API：
+curl http://localhost:7777/config -H "Authorization: Bearer agno_pat_xxxxxxxx"
+```
+
+默认权限范围（scopes）是 `agents:run, teams:run, workflows:run, sessions:read, config:read`——够跑 agent、读 session，但管理不了别的 service account（403）。也可以用配套的 `agnoctl tokens` 命令行代替手写 curl：
+
+```bash
+agnoctl tokens create ci-runner --expires 90d          # 创建，默认90天过期
+agnoctl tokens list                                    # 列出
+agnoctl tokens revoke ci-runner                         # 撤销（立即生效，同worker缓存也会清）
+```
+
+完整可运行示例：`cookbook/05_agent_os/07_security/service_accounts.py`
+
+### 1.2 怎么用：MCP OAuth v2（把 MCP server 对外暴露给 Claude.ai / ChatGPT 等连接器）
+
+第一步，先把 AgentOS 变成一个 MCP server（这一步就是本项目已经在用的 `enable_mcp_server=True`，只是参数名换了）：
+
+```python
+from agno.os import AgentOS
+
+agent_os = AgentOS(
+    agents=[my_agent],
+    db=db,
+    mcp_server=True,   # 旧写法 enable_mcp_server=True 仍可用，但会打弃用日志
+)
+```
+
+第二步（可选，仅当要让 Claude.ai/ChatGPT 这类外部 MCP 客户端直接连接、需要走 OAuth 授权时才需要），让 AgentOS 变成自己的 OAuth 2.1 授权服务器：
+
+```python
+from agno.os import AgentOS, AgentOSBuiltinAuth
+
+agent_os = AgentOS(
+    agents=[my_agent],
+    db=db,                              # 生产环境要用 PostgresDb，多副本部署需要它持久化 client/code/key
+    mcp_server=True,
+    mcp_auth=AgentOSBuiltinAuth.from_env(),   # 从环境变量读 AGENTOS_URL / MCP_CONNECT_SECRET 等
+)
+```
+
+需要的环境变量：`AGENTOS_URL`、`MCP_CONNECT_SECRET`（≥16 字符），可选 `AGENTOS_MCP_SIGNING_KEY`。跑起来之后访问 `/.well-known/oauth-protected-resource/mcp` 能看到发现端点。如果不想自己当授权服务器、想接第三方（如 WorkOS AuthKit），把 `mcp_auth` 换成对应的 provider 即可（`cookbook/05_agent_os/14_mcp/oauth_authkit.py` 有完整示例）。
+
+配套的 `agnoctl connect` 命令可以直接在本地把这个 MCP server 注册进 Claude Desktop / Claude Code：
+
+```bash
+agnoctl connect          # 交互式选择目标(claude-desktop/claude-code等)并写入连接配置
+agnoctl status           # 查看当前AgentOS状态
+```
+
+完整可运行示例：`cookbook/05_agent_os/14_mcp/{basic,oauth_builtin,oauth_authkit,secure_mcp,custom_tools}.py`
+
+### 1.3 Entity Memory 重写后怎么用（接口没变，值得知道新写法）
+
+写法和以前一样，通过 `learning=LearningMachine(...)` 挂载：
+
+```python
+from agno.agent import Agent
+from agno.learn import EntityMemoryConfig, LearningMachine
+from agno.models.openai import OpenAIResponses
+
+agent = Agent(
+    model=OpenAIResponses(id="gpt-5.5"),
+    db=db,
+    learning=LearningMachine(
+        entity_memory=EntityMemoryConfig(namespace="my_namespace"),
+    ),
+)
+```
+
+Entity memory 是纯 agentic 的：agent 通过四个工具自己维护——`remember_about`（记一条关于某个实体的事实）、`link_entities`（关联两个实体）、`search_entities`（检索）、`forget`（遗忘/撤销）。重写后新增了"supersession"（新事实自动废止旧事实，比如实体改名或者信息更新，不会留下矛盾的两条记录）和实体名归一化（"Sarah Chen" 和 "sarah chen" 会解析成同一个实体，不会重复建档）。**注意**：不要同时对同一个 agent 开 `enable_agentic_memory=True` 又给 `learning=` 配一个带 `user_memory` store 的 `LearningMachine`——两者都会注册叫 `update_user_memory` 的工具，会静默丢一个（本项目已排查过现有代码没踩这个坑，见第六节）。
+
+完整教程：`cookbook/08_learning/`（从 `00_quickstart/` 到 `11_composition/` 循序渐进，`04_entity_memory/` 是这块的深潜目录）。
+
+### 1.4 不建议现在投入的新功能（知道就好）
+
+- **FileSystem**（`from agno.fs import ...`）：给 agent 一个持久化文件系统抽象（读写文件当长期记忆）。本项目没有任何引用，暂不需要了解用法。
+- **`agno.scorer`**：新的评测打分子系统（配合 rollout engine 做在线/离线评估）。本项目没有引用。
+- **Valkey / OpenSearch**：`from agno.vectordb.valkey import ValkeyVectorDb` / `from agno.vectordb.opensearch import OpenSearch` 之类的新后端，用法和其他 vectordb 后端一致（`vector_db=ValkeyVectorDb(...)` 传给 `Knowledge`），但本项目走 PGVector 深度定制路线，没有切换的必要。注意 Valkey 还有一个同名但不同用途的 `agno.db.valkey.ValkeyDb`（session/memory 存储后端，不是向量库），两者是刻意分开命名的不同类，不要混淆。
+
 ---
 
 ## 二、上游修复的关键 Bug
