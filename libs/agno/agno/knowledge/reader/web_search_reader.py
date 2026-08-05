@@ -272,8 +272,8 @@ class WebSearchReader(Reader):
                 continue
 
             # Create document
-            document = self._create_document_from_url(url, content, result)
-            document = document if document.content else None
+            created_document = self._create_document_from_url(url, content, result)
+            document: Optional[Document] = created_document if created_document.content else None
 
             # Apply chunking if enabled
             if self.chunk and document:

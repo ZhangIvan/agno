@@ -7,8 +7,6 @@ from agno.utils.events import (
     _GENERIC_RESULT_THRESHOLD,
     _KNOWLEDGE_RESULT_THRESHOLD,
     _KNOWLEDGE_TOOL_NAMES,
-    _MAX_JSON_PARSE_SIZE,
-    _TOOL_RESULT_THRESHOLD,
     _format_size,
     _make_summary,
     _summarize_result,
@@ -186,7 +184,6 @@ def test_summarize_result_json_primitive_string():
 
 
 def test_summarize_result_empty_list():
-    result = _summarize_result("[]")
     # Empty list is <= threshold (2 chars)
     assert _summarize_result("[]") == "[]"
 

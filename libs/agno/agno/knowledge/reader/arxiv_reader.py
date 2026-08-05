@@ -70,14 +70,16 @@ class ArxivReader(Reader):
             if result.summary:
                 links = ", ".join([x.href for x in result.links])
 
-                documents.append(
-                    Document(
-                        name=result.title,
-                        id=result.title,
-                        meta_data={"pdf_url": str(result.pdf_url), "article_links": links},
-                        content=result.summary,
-                    )
+                document = Document(
+                    name=result.title,
+                    id=result.title,
+                    meta_data={"pdf_url": str(result.pdf_url), "article_links": links},
+                    content=result.summary,
                 )
+                if self.chunk:
+                    documents.extend(self.chunk_document(document))
+                else:
+                    documents.append(document)
 
         return documents
 

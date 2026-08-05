@@ -903,7 +903,7 @@ class Knowledge(RemoteKnowledge):
 
     def get_valid_filters(self) -> Set[str]:
         if self.contents_db is None:
-            log_info("Advanced filtering is not supported without a contents db. All filter keys considered valid.")
+            log_info("No contents db configured; returning an empty filter validation key set.")
             return set()
         contents, _ = self.get_content()
         valid_filters: Set[str] = set()
@@ -915,7 +915,7 @@ class Knowledge(RemoteKnowledge):
 
     async def aget_valid_filters(self) -> Set[str]:
         if self.contents_db is None:
-            log_info("Advanced filtering is not supported without a contents db. All filter keys considered valid.")
+            log_info("No contents db configured; returning an empty filter validation key set.")
             return set()
         contents, _ = await self.aget_content()
         valid_filters: Set[str] = set()
@@ -928,6 +928,10 @@ class Knowledge(RemoteKnowledge):
     def validate_filters(
         self, filters: Union[Dict[str, Any], List[FilterExpr]]
     ) -> Tuple[Union[Dict[str, Any], List[FilterExpr]], List[str]]:
+        if self.contents_db is None:
+            log_info("No contents db configured; skipping filter key validation and preserving filters.")
+            return filters, []
+
         valid_filters_from_db = self.get_valid_filters()
 
         valid_filters, invalid_keys = self._validate_filters(filters, valid_filters_from_db)
@@ -938,6 +942,10 @@ class Knowledge(RemoteKnowledge):
         self, filters: Union[Dict[str, Any], List[FilterExpr]]
     ) -> Tuple[Union[Dict[str, Any], List[FilterExpr]], List[str]]:
         """Return a tuple containing a dict with all valid filters and a list of invalid filter keys"""
+        if self.contents_db is None:
+            log_info("No contents db configured; skipping filter key validation and preserving filters.")
+            return filters, []
+
         valid_filters_from_db = await self.aget_valid_filters()
 
         valid_filters, invalid_keys = self._validate_filters(filters, valid_filters_from_db)
@@ -1503,6 +1511,7 @@ class Knowledge(RemoteKnowledge):
                     await self._aprocess_lightrag_content(content, KnowledgeContentOrigin.PATH)
                     return
 
+                reader: Optional[Reader]
                 if content.reader:
                     reader = content.reader
                 else:
@@ -1591,6 +1600,7 @@ class Knowledge(RemoteKnowledge):
                     self._process_lightrag_content(content, KnowledgeContentOrigin.PATH)
                     return
 
+                reader: Optional[Reader]
                 if content.reader:
                     reader = content.reader
                 else:
@@ -1712,7 +1722,7 @@ class Knowledge(RemoteKnowledge):
         url_path = Path(_unquote(parsed_url.path))
         file_extension = url_path.suffix.lower()
 
-        file_source: Optional[Union[Path, BytesIO]] = None
+        file_source: Optional[Path] = None
         _tmp_file_path: Optional[str] = None
         # Skip pre-download when a custom URL-based reader is provided —
         # it handles the URL directly (e.g. LLMsTxtReader fetches linked pages)
@@ -1782,11 +1792,7 @@ class Knowledge(RemoteKnowledge):
             await self._aupdate_content(content)
             return
 
-        # 6. Chunk documents if needed
-        if reader and not reader.chunk:
-            read_documents = await reader.chunk_documents_async(read_documents)
-
-        # 7. Group documents by source URL for multi-page readers (like WebsiteReader)
+        # 6. Group documents by source URL for multi-page readers (like WebsiteReader)
         docs_by_source: Dict[str, List[Document]] = {}
         for doc in read_documents:
             source_url = doc.meta_data.get("url", content.url) if doc.meta_data else content.url
@@ -1925,7 +1931,7 @@ class Knowledge(RemoteKnowledge):
         url_path = Path(_unquote(parsed_url.path))
         file_extension = url_path.suffix.lower()
 
-        file_source: Optional[Union[Path, BytesIO]] = None
+        file_source: Optional[Path] = None
         _tmp_file_path: Optional[str] = None
         # Skip pre-download when a custom URL-based reader is provided —
         # it handles the URL directly (e.g. LLMsTxtReader fetches linked pages)
@@ -1986,11 +1992,7 @@ class Knowledge(RemoteKnowledge):
             self._update_content(content)
             return
 
-        # 6. Chunk documents if needed (sync version)
-        if reader:
-            read_documents = self._chunk_documents_sync(reader, read_documents)
-
-        # 7. Group documents by source URL for multi-page readers (like WebsiteReader)
+        # 6. Group documents by source URL for multi-page readers (like WebsiteReader)
         docs_by_source: Dict[str, List[Document]] = {}
         for doc in read_documents:
             source_url = doc.meta_data.get("url", content.url) if doc.meta_data else content.url
@@ -2099,7 +2101,7 @@ class Knowledge(RemoteKnowledge):
             await self._aprocess_lightrag_content(content, KnowledgeContentOrigin.CONTENT)
             return
 
-        read_documents = []
+        read_documents: List[Document] = []
 
         if isinstance(content.file_data, str):
             content_bytes = content.file_data.encode("utf-8", errors="replace")
@@ -2129,6 +2131,7 @@ class Knowledge(RemoteKnowledge):
                     content_io = content.file_data.content  # type: ignore
 
                 # Respect explicitly provided reader; otherwise detect from content
+                reader: Optional[Reader]
                 if content.reader:
                     log_debug(f"Using reader: {content.reader.__class__.__name__} to read content")
                     reader = content.reader
@@ -2139,6 +2142,11 @@ class Knowledge(RemoteKnowledge):
                     else:
                         real_ext = Path(content.file_data.filename).suffix.lower() if content.file_data.filename else ""
                     reader, _ = self._select_reader_by_extension(real_ext)
+                if reader is None:
+                    content.status = ContentStatus.FAILED
+                    content.status_message = "No reader available for this content type"
+                    await self._aupdate_content(content)
+                    return
                 # Use file_data.filename for reader (preserves extension for format detection)
                 reader_name = content.file_data.filename or content.name or f"content_{content.file_data.type}"
                 read_documents = await reader.async_read(content_io, name=reader_name)
@@ -2207,7 +2215,7 @@ class Knowledge(RemoteKnowledge):
             self._process_lightrag_content(content, KnowledgeContentOrigin.CONTENT)
             return
 
-        read_documents = []
+        read_documents: List[Document] = []
 
         if isinstance(content.file_data, str):
             content_bytes = content.file_data.encode("utf-8", errors="replace")
@@ -2237,6 +2245,7 @@ class Knowledge(RemoteKnowledge):
                     content_io = content.file_data.content  # type: ignore
 
                 # Respect explicitly provided reader; otherwise detect from content
+                reader: Optional[Reader]
                 if content.reader:
                     log_debug(f"Using reader: {content.reader.__class__.__name__} to read content")
                     reader = content.reader
@@ -2247,6 +2256,11 @@ class Knowledge(RemoteKnowledge):
                     else:
                         real_ext = Path(content.file_data.filename).suffix.lower() if content.file_data.filename else ""
                     reader, _ = self._select_reader_by_extension(real_ext)
+                if reader is None:
+                    content.status = ContentStatus.FAILED
+                    content.status_message = "No reader available for this content type"
+                    self._update_content(content)
+                    return
                 # Use file_data.filename for reader (preserves extension for format detection)
                 reader_name = content.file_data.filename or content.name or f"content_{content.file_data.type}"
                 read_documents = reader.read(content_io, name=reader_name)
@@ -2704,8 +2718,10 @@ class Knowledge(RemoteKnowledge):
         if self.vector_db.upsert_available() and upsert:
             try:
                 await self.vector_db.async_upsert(
-                    content.content_hash, read_documents, _filters_from_metadata(content.metadata)
-                )  # type: ignore[arg-type]
+                    content.content_hash,  # type: ignore[arg-type]
+                    read_documents,
+                    _filters_from_metadata(content.metadata),
+                )
             except Exception as e:
                 log_error(f"Error upserting document: {e}", exc_info=True)
                 content.status = ContentStatus.FAILED
@@ -3940,7 +3956,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
 
     async def _async_sign_reference_urls(self, references: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Async version of ``_sign_reference_urls``."""
-        if not self.page_image_storage:
+        page_image_storage = self.page_image_storage
+        if not page_image_storage:
             return references
 
         async def _sign_one(ref: Dict[str, Any]) -> Dict[str, Any]:
@@ -3954,7 +3971,7 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
                     if url:
                         try:
                             async with self._sign_semaphore:
-                                meta[url_field] = await self.page_image_storage.async_sign_url(
+                                meta[url_field] = await page_image_storage.async_sign_url(
                                     url, expires=self.url_signature_expires
                                 )
                         except Exception as e:
@@ -4135,6 +4152,8 @@ Make sure to pass the filters as [Dict[str: Any]] to the tool. FOLLOW THIS STRUC
         storage = self.page_image_storage
 
         def _sign(url: str) -> Optional[str]:
+            if storage is None:
+                return None
             if sign_url_cache is not None and url in sign_url_cache:
                 return sign_url_cache[url]
             signed = storage.sign_url(url, expires=self.url_signature_expires)

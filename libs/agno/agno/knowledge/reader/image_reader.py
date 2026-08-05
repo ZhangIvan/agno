@@ -101,7 +101,8 @@ class ImageReader(Reader):
                 doc_name = name or file.stem
                 cache_path, cache_dir = self._to_webp(str(file), doc_name)
             else:
-                raw_name = name or getattr(file, "name", "image.png")
+                file_name = getattr(file, "name", None)
+                raw_name = name or (str(file_name) if file_name else "image.png")
                 base = os.path.basename(raw_name)
                 doc_name = base.rsplit(".", 1)[0] if "." in base else base
                 cache_path, cache_dir = self._to_webp(file, doc_name)

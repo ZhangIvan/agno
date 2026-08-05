@@ -3,7 +3,6 @@
 import json
 
 from agno.os.utils import (
-    _REFERENCE_MARKERS,
     _SESSION_NAME_MAX_LENGTH,
     _extract_session_name_from_content,
     _normalize_run,

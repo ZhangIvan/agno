@@ -243,10 +243,10 @@ def create_knowledge_search_tool(
                 return f"Error searching knowledge base: {type(e).__name__}"
 
             retrieval_timer.stop()
-            all_docs = _dedup_docs(all_docs) if all_docs else None
-            _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
+            deduped_docs = _dedup_docs(all_docs) if all_docs else None
+            _track_references(deduped_docs, ", ".join(queries), retrieval_timer.elapsed)
             log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-            return _format_results(all_docs)
+            return _format_results(deduped_docs)
 
         async def asearch_knowledge_base_with_filters(
             queries: List[str], filters: Optional[List[KnowledgeFilter]] = None
@@ -292,10 +292,10 @@ def create_knowledge_search_tool(
                 return f"Error searching knowledge base: {type(e).__name__}"
 
             retrieval_timer.stop()
-            all_docs = _dedup_docs(all_docs) if all_docs else None
-            _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
+            deduped_docs = _dedup_docs(all_docs) if all_docs else None
+            _track_references(deduped_docs, ", ".join(queries), retrieval_timer.elapsed)
             log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-            return _format_results(all_docs)
+            return _format_results(deduped_docs)
 
         if async_mode:
             return Function.from_callable(asearch_knowledge_base_with_filters, name="search_knowledge_base")
@@ -365,10 +365,10 @@ def create_knowledge_search_tool(
                             log_warning(f"Knowledge search failed for '{q}': {str(e)}")
 
                     retrieval_timer.stop()
-                    all_docs = _dedup_docs(all_docs) if all_docs else None
-                    _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
+                    deduped_docs = _dedup_docs(all_docs) if all_docs else None
+                    _track_references(deduped_docs, ", ".join(queries), retrieval_timer.elapsed)
                     log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-                    return _format_results(all_docs)
+                    return _format_results(deduped_docs)
 
             except Exception as e:
                 log_warning(f"Knowledge search failed: {str(e)}")
@@ -448,10 +448,10 @@ def create_knowledge_search_tool(
                             all_docs.extend(docs)
 
                     retrieval_timer.stop()
-                    all_docs = _dedup_docs(all_docs) if all_docs else None
-                    _track_references(all_docs, ", ".join(queries), retrieval_timer.elapsed)
+                    deduped_docs = _dedup_docs(all_docs) if all_docs else None
+                    _track_references(deduped_docs, ", ".join(queries), retrieval_timer.elapsed)
                     log_debug(f"Time to get references: {retrieval_timer.elapsed:.4f}s")
-                    return _format_results(all_docs)
+                    return _format_results(deduped_docs)
 
             except Exception as e:
                 log_warning(f"Knowledge search failed: {str(e)}")

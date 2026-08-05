@@ -102,6 +102,7 @@ from agno.utils.events import (
     create_run_started_event,
     create_session_summary_completed_event,
     create_session_summary_started_event,
+    error_type_of,
     handle_event,
 )
 from agno.utils.hooks import (
@@ -528,6 +529,7 @@ def _run(
                     session=agent_session,
                     user_id=user_id,
                     existing_future=learning_future,
+                    run_context=run_context,
                 )
 
                 # Start cultural knowledge creation in background thread
@@ -941,6 +943,7 @@ def _run_stream(
                     session=agent_session,
                     user_id=user_id,
                     existing_future=learning_future,
+                    run_context=run_context,
                 )
 
                 # Start cultural knowledge creation in background thread
@@ -1275,7 +1278,7 @@ def _run_stream(
                 run_response.status = RunStatus.error
                 flush_in_flight_messages_on_error(run_response, locals().get("run_messages"))
                 # Add error event to list of events
-                run_error = create_run_error_event(run_response, error=str(e))
+                run_error = create_run_error_event(run_response, error=str(e), error_type=error_type_of(e))
                 run_response.events = add_error_event(error=run_error, events=run_response.events)
 
                 # If the content is None, set it to the error message
@@ -1668,6 +1671,7 @@ async def _arun(
                     session=agent_session,
                     user_id=user_id,
                     existing_task=learning_task,
+                    run_context=run_context,
                 )
 
                 # Start cultural knowledge creation as a background task (runs concurrently with the main execution)
@@ -2351,6 +2355,7 @@ async def _arun_stream(
                     session=agent_session,
                     user_id=user_id,
                     existing_task=learning_task,
+                    run_context=run_context,
                 )
 
                 # Start cultural knowledge creation as a background task (runs concurrently with the main execution)
@@ -2706,7 +2711,7 @@ async def _arun_stream(
                 run_response.status = RunStatus.error
                 flush_in_flight_messages_on_error(run_response, locals().get("run_messages"))
                 # Add error event to list of events
-                run_error = create_run_error_event(run_response, error=str(e))
+                run_error = create_run_error_event(run_response, error=str(e), error_type=error_type_of(e))
                 run_response.events = add_error_event(error=run_error, events=run_response.events)
 
                 # If the content is None, set it to the error message
@@ -4115,7 +4120,7 @@ def _continue_run_stream(
                 run_response.status = RunStatus.error
                 flush_in_flight_messages_on_error(run_response, locals().get("run_messages"))
                 # Add error event to list of events
-                run_error = create_run_error_event(run_response, error=str(e))
+                run_error = create_run_error_event(run_response, error=str(e), error_type=error_type_of(e))
                 run_response.events = add_error_event(error=run_error, events=run_response.events)
 
                 # If the content is None, set it to the error message
@@ -4959,7 +4964,7 @@ async def _acontinue_run(
                 run_response.status = RunStatus.error
                 flush_in_flight_messages_on_error(run_response, locals().get("run_messages"))
                 # Add error event to list of events
-                run_error = create_run_error_event(run_response, error=str(e))  # type: ignore
+                run_error = create_run_error_event(run_response, error=str(e), error_type=error_type_of(e))  # type: ignore
                 run_response.events = add_error_event(error=run_error, events=run_response.events)  # type: ignore
 
                 # If the content is None, set it to the error message
@@ -5532,7 +5537,7 @@ async def _acontinue_run_stream(
                 run_response.status = RunStatus.error
                 flush_in_flight_messages_on_error(run_response, locals().get("run_messages"))
                 # Add error event to list of events
-                run_error = create_run_error_event(run_response, error=str(e))
+                run_error = create_run_error_event(run_response, error=str(e), error_type=error_type_of(e))
                 run_response.events = add_error_event(error=run_error, events=run_response.events)
 
                 # If the content is None, set it to the error message

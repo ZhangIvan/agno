@@ -161,6 +161,18 @@ class PageImageStorage(ABC):
     # STS / Upload credentials (for frontend direct upload)
     # ------------------------------------------------------------------
 
+    @abstractmethod
+    def _base_url(self, object_key: str) -> str:
+        """Return the public/base URL for an object in the bucket.
+
+        Args:
+            object_key: Key of the object.
+
+        Returns:
+            The URL clients can use to reach the object (subject to signing
+            for private buckets).
+        """
+
     def _generate_upload_object_key(self, prefix: Optional[str], **kwargs: Any) -> str:
         """Generate a unique object key for upload."""
         file_ext = kwargs.get("file_extension", "")

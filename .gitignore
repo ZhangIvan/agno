@@ -19,6 +19,7 @@
 
 # Ignore .env files
 .env
+.env.production
 
 # Ignore .envrc files (used by direnv: https://direnv.net/)
 .envrc
@@ -108,3 +109,9 @@ CLAUDE_PRIVATE.md
 /.graphify_python
 /.graphify_uncached.txt
 /graphify-out/
+
+# generated synthetic-data outputs from data_labeling cookbooks (never committed)
+cookbook/data_labeling/*/data/generated/
+
+# cookbook rollout exports and baselines are run artifacts, never source
+data/generated/

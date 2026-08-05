@@ -24,14 +24,13 @@ def main() -> None:
         add_history_to_context=True,
         num_history_runs=10,
         tools=[get_weather],
-        debug_mode=True,
     )
 
     # Turn 1 — Claude with tool call
     agent.print_response("What is the weather in Paris?")
 
     # Turn 2 — Gemini with tool call
-    agent.model = Gemini()
+    agent.model = Gemini(id="gemini-3.5-flash")
     agent.print_response("What is the weather in London?")
 
     # Turn 3 — Claude with tool call (works fine on its own)
@@ -39,7 +38,7 @@ def main() -> None:
     agent.print_response("What is the weather in Tokyo?")
 
     # Turn 4 — Gemini summary
-    agent.model = Gemini()
+    agent.model = Gemini(id="gemini-3.5-flash")
     agent.print_response("Summarize all the weather we checked.")
 
 

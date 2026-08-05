@@ -598,10 +598,9 @@ class PgVector(VectorDb):
         base_delay: float = 0.5,
     ) -> None:
         """Embed a single document with exponential-backoff retry."""
-        if self.page_image_storage and doc.meta_data.get("page_image_url"):
-            doc.meta_data["page_image_url_sign"] = await self.page_image_storage.async_sign_url(
-                doc.meta_data.get("page_image_url")
-            )
+        page_image_url = doc.meta_data.get("page_image_url")
+        if self.page_image_storage and page_image_url:
+            doc.meta_data["page_image_url_sign"] = await self.page_image_storage.async_sign_url(page_image_url)
 
         for attempt in range(max_retries + 1):
             try:

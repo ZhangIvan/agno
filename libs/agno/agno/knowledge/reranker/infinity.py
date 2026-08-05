@@ -71,11 +71,12 @@ class InfinityReranker(Reranker):
             logger.warning(f"top_n should be a positive integer, got {self.top_n}, setting top_n to None")
             top_n = None
 
-        if self.score_threshold and not (0 < self.score_threshold):
+        score_threshold = self.score_threshold
+        if score_threshold and not (0 < score_threshold):
             logger.warning(
-                f"score_threshold should be a positive float, got {self.score_threshold}, setting score_threshold to None"
+                f"score_threshold should be a positive float, got {score_threshold}, setting score_threshold to None"
             )
-            self.score_threshold = None
+            score_threshold = None
 
         compressed_docs: list[Document] = []
 
@@ -125,8 +126,12 @@ class InfinityReranker(Reranker):
                 if top_n and len(compressed_docs) > top_n:
                     compressed_docs = compressed_docs[:top_n]
 
-                if self.score_threshold is not None:
-                    compressed_docs = [doc for doc in compressed_docs if doc.reranking_score >= self.score_threshold]
+                if score_threshold is not None:
+                    filtered_docs: list[Document] = []
+                    for doc in compressed_docs:
+                        if doc.reranking_score is not None and doc.reranking_score >= score_threshold:
+                            filtered_docs.append(doc)
+                    compressed_docs = filtered_docs
 
         except Exception:
             logger.exception(f"Error connecting to Infinity server at {self.base_url}")
@@ -152,11 +157,12 @@ class InfinityReranker(Reranker):
             logger.warning(f"top_n should be a positive integer, got {self.top_n}, setting top_n to None")
             top_n = None
 
-        if self.score_threshold and not (0 < self.score_threshold):
+        score_threshold = self.score_threshold
+        if score_threshold and not (0 < score_threshold):
             logger.warning(
-                f"score_threshold should be a positive float, got {self.score_threshold}, setting score_threshold to None"
+                f"score_threshold should be a positive float, got {score_threshold}, setting score_threshold to None"
             )
-            self.score_threshold = None
+            score_threshold = None
 
         compressed_docs: list[Document] = []
 
@@ -206,8 +212,12 @@ class InfinityReranker(Reranker):
                 if top_n and len(compressed_docs) > top_n:
                     compressed_docs = compressed_docs[:top_n]
 
-                if self.score_threshold is not None:
-                    compressed_docs = [doc for doc in compressed_docs if doc.reranking_score >= self.score_threshold]
+                if score_threshold is not None:
+                    filtered_docs: list[Document] = []
+                    for doc in compressed_docs:
+                        if doc.reranking_score is not None and doc.reranking_score >= score_threshold:
+                            filtered_docs.append(doc)
+                    compressed_docs = filtered_docs
 
         except Exception:
             logger.exception(f"Error connecting to Infinity server at {self.base_url}")
