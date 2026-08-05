@@ -56,7 +56,7 @@
 | lean_references | `agent.py`, `_utils.py`, `_default_tools.py`, `team.py`, `team/_utils.py` | `agent.py` 命中 3 处 |
 | user_message_prefix | `agent.py`, `agent/_run.py` | `_run.py` 中 `with _user_message_prefix` 命中 9 处（较 v2.6.20 时期多 1 处，为上游新增流式路径带来） |
 | 多云存储后端 | `knowledge/storage/` | 上游无同名目录，零冲突，完整保留 |
-| 知识库页面图片 | `knowledge.py`, `knowledge/utils.py`, `knowledge/reader/` | `page_image_storage` 命中 34 处 |
+| 知识库页面图片 | `knowledge.py`, `knowledge/utils.py`, `knowledge/reader/` | `page_image_storage` 命中 35 处（较合并前 34 处多 1 处，来自第五节 mypy 修复里把 `self.page_image_storage` 捕获成局部变量 `page_image_storage` 的那处改动，非功能变化） |
 | Doubao Embedder | `knowledge/embedder/doubao.py` | 上游无同名文件，完整保留 |
 | AgentOS Storage Router | `os/routers/storage/` | 完整保留，`os/app.py` 合并后 `storages`/`storage_ids` 构造参数与两处 `get_storage_router()` 注册均确认完整 |
 | MCP 异步清理 | `tools/mcp/mcp.py` | `_safe_cleanup`/`asyncio.shield` 保留；上游收窄了 2 处**跟清理无关**的 `except BaseException` 为 `except Exception`（`ping`/`initialize`），已采纳，我们清理路径的 `except BaseException` 未受影响 |
@@ -137,7 +137,9 @@
 | `enable_agentic_memory` + 配了 `user_memory` store 的 `LearningMachine` 同时使用会导致 `update_user_memory` 工具名冲突（上游新增的警告） | ✅ 已排查，非本项目问题 | 检查过项目里唯一同时出现这两种写法的 3 个文件（`gemini_3/18_memory.py`、`level_3_memory_learning.py`、`level_5_api.py`），它们的 `LearningMachine` 都只配了 `learned_knowledge` store，未配 `user_memory` store，不会触发这个冲突 |
 | Reader `self.chunk` 契约变化（Knowledge 层删除了"reader 没 chunk 就强制兜底 chunk"的逻辑） | ✅ 已验证兼容，且顺带修了一个真实 bug | 我们全部 9 个 stock reader 早已在内部正确实现 `if self.chunk:`；唯一的例外是 `arxiv_reader.py`（上游这次带的修复本身有缩进 bug，已一并修正，见 4.5） |
 | workflow `Condition`/`Router` 的 `session_state` 参数弃用（改用 `run_context`） | ✅ 已随上游自动解决 | 之前定位到的 3 个用旧写法的 cookbook（`state_in_condition.py`/`state_in_router.py`/`cel_session_state.py`）在合并后**已经是上游自己重写过的 `run_context` 新写法**，无需手工改。且确认弃用告警走的是 `log_warning()`，不是 Python `DeprecationWarning`，不会让测试失败 |
-| Gemini 默认模型静默切换（`gemini-flash-latest` → `gemini-3.5-flash`） | ✅ 已处理 | `cookbook/02_agents/14_advanced/interchange_model/{claude_gemini,openai_gemini,all_providers}.py` 3 个文件的裸 `Gemini()` 调用已补上显式 `id="gemini-3.5-flash"`；顺手把 2 个文件里违反 CLAUDE.md 规则的 `gpt-4o` 也换成了 `gpt-5.5` |
+| Gemini 默认模型静默切换（`gemini-flash-latest` → `gemini-3.5-flash`） | ✅ 已处理 | `cookbook/02_agents/14_advanced/interchange_model/{claude_gemini,openai_gemini,all_providers}.py` 3 个文件的裸 `Gemini()` 调用已补上显式 `id="gemini-3.5-flash"` |
+| CLAUDE.md 规则「不要在 cookbook/示例里用 `gpt-4o`/`gpt-4o-mini`，改用 `gpt-5.5`」 | ✅ 已处理（本次合并触及的范围内） | 全仓库还有 gpt-4o/gpt-4o-mini 共 324 处，绝大多数（306 处）是合并前就存在的历史存量，不在本次范围内；本次**合并实际新增/改动**的文件里命中 18 处（`interchange_model/` 2 个 + `workflows/`、`evals/`、`memory/`、`91_tools/`、`observability/` 共 16 个），已全部换成 `gpt-5.5`（`91_tools/models/openai_tools.py` 里的 `gpt-4o-transcribe` 是转录专用模型，不属于该规则约束的对象，保留未动）。`TEST_LOG.md` 里的一处 `gpt-4o` 是历史测试记录（记录当时真实观测到的调试日志），编辑会篡改历史事实，未改动 |
+| CLAUDE.md 规则「不要在 cookbook/示例里用 `OpenAIChat`，改用 `OpenAIResponses`」 | ⚠️ **已发现，未处理** | 上面那 18 个文件里，除 2 个 `interchange_model` 文件外，其余 15 个都用的是 `OpenAIChat`。这是比模型 id 字符串替换更大的改动——涉及切换模型类（不同的工具调用 ID 格式、API 表现），本沙箱环境没有真实 API key 无法验证切换后示例是否还能正常跑通，**没有贸然替换**。同样是历史存量问题（不是这次合并引入的），建议作为单独任务、有条件跑通验证后再处理，不要在这次合并里顺手改 |
 | AgentOS 认证中间件重构 | ✅ 已验证无影响 | 私有方法重命名（`_add_jwt_middleware`→`_add_auth_middleware`），确认我们的 `os/routers/storage/` 未直接引用旧名 |
 | `TeamSession.get_team_history`/`get_team_history_context` 新增 `team_id` 参数插在 `num_runs` 前面 | ✅ 已加固 | 见第七节 Tier D，本 fork 所有内部调用点确认都用关键字传参，未受影响；额外把这两个方法的 `team_id` 做成关键字专用，防止外部下游位置传参时静默拿错结果 |
 
@@ -209,7 +211,7 @@ grep -c "page_image_storage" libs/agno/agno/knowledge/knowledge.py  # 34
 | 测试目录 | 结果 |
 |---|---|
 | `tests/unit/knowledge/` | 全部通过（含补装依赖后的 excel `.xls` 用例） |
-| `tests/unit/vectordb/test_pgvector.py`, `test_pgvector_strict_search.py` | 2 个失败（`test_async_insert`/`test_async_upsert`），**确认为合并前已存在**：`test_pgvector.py` 与 v2.8.6 tag 逐字节一致，mock fixture 用的是同步 `MagicMock()` 而非 `AsyncMock`，与本次合并无关 |
+| `tests/unit/vectordb/`（全目录，补装 `pgvector`/`redis`/`pymilvus`/`valkey-glide-sync` 等能快速装好的依赖后） | 197 个可收集，186 通过、2 失败、9 error。2 个失败是 `test_pgvector.py::test_async_insert`/`test_async_upsert`，**确认为合并前已存在**：`test_pgvector.py` 与 v2.8.6 tag 逐字节一致，mock fixture 用的是同步 `MagicMock()` 而非 `AsyncMock`，与本次合并无关。9 个 error 是 `test_redisdb.py` 缺 `redisvl` 子依赖。剩余 13 个文件（chromadb/qdrant/weaviate/mongodb/pinecone/cassandra/couchbase/lancedb/opensearch/surrealdb/upstash/clickhouse×2）因为对应 SDK 体积大、安装耗时长（`agno[vectordbs]` 完整安装 4 分钟超时未完成），且均为本项目未使用的后端，本次未强行装全——这是本次验证范围相对计划里"跑 `tests/unit/vectordb/`"字面要求的一处收缩，如实记录在此，不假装已经覆盖 |
 | `tests/unit/agent/` | 1216 个中 2 个失败（`test_knowledge_retriever_tool_priority.py` 两个用例），**确认为合并前已存在**：测试文件与实现文件均和 v2.8.6 tag 逐字节一致 |
 | `tests/unit/workflow/` | 全部通过 |
 | `tests/unit/learn/` | **全部通过**（entity memory 重写的最高优先级回归项） |

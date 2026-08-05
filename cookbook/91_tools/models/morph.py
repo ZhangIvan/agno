@@ -54,7 +54,7 @@ def main():
     target_file = create_sample_file()
 
     code_editor = Agent(
-        model=OpenAIChat(id="gpt-4o"),
+        model=OpenAIChat(id="gpt-5.5"),
         tools=[MorphTools(model="morph-v3-large")],
         markdown=True,
     )
