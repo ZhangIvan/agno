@@ -14,6 +14,35 @@
 
 ---
 
+## 总览：v2.6.20 → v2.8.7 整体变更与注意事项
+
+这是两轮合并的最终状态（`codex/agno-merge-v2.6.20` → `merge-agno-v2.8.6` → `merge-agno-v2.8.7`），分支链完整、逐段可追溯。下面是给要接手这条分支的人（review / 合并进 main / 通知下游）的摘要，细节分别在 `UPGRADE_v2.8.6.md`（v2.6.20→v2.8.6，主体工作量）和本文件（v2.8.6→v2.8.7，小补丁）里。
+
+### 变更点（做了什么）
+
+- 跨 3 个 minor 版本、171+14=185 个上游提交，一次性合并到位（未分阶段停靠）。
+- 全部 13+1=14 处合并冲突逐一手工核实解决，不是机械 accept-theirs/ours；过程中发现并修了 **3 个真实 bug**（2 个在 `knowledge.py` 的 reader-not-found 崩溃路径、1 个是上游自己 `arxiv_reader.py` 的缩进 bug）。
+- 主动做了 2 处比上游更保守的下游兼容性加固：恢复 `DEFAULT_OPENAI_MODEL_ID` 常量（上游删除但我们自己代码在用）、把 `get_team_history`/`get_team_history_context` 的新增参数改成关键字专用（防止下游位置传参静默拿错数据）。
+- 10 个存量 cookbook 做了同步修改（弃用写法迁移、CLAUDE.md 规范违规清理），另发现并修了 16 处本次合并新增/改动文件里的 `gpt-4o` 违规。
+- `mypy` 1.18→2.1 大版本跳跃触发的 30 个新告警，逐条核实归因后修到 **0 个**（最后 1 个"确认纯上游存量"的问题在 v2.8.7 那轮被上游自己的重构顺带消掉了）。
+- 全部 13 项已知定制特性（lean_references / user_message_prefix / 多云存储 / 页面图片 / Doubao Embedder / MCP 清理 / PGVector 重试 / OpenAI 图片注入 / 中文 JSON 等）逐一验证保留，另外发现并补充记录了 2 项此前未被文档记录的定制（`InfinityReranker.score_threshold`、`WebSearchReader` 的 raise-on-error 约定）。
+- 用真实下游消费者（`/home/friend/local_code/AgentCom-las-feature`）验证过下游兼容性，不是纸上谈兵：它跑的是我们私有 fork 的 v2.6.4（比这次的起点还老），核实了它对 `agno.agent._storage.aread_or_create_session`（私有模块）、`agno_knowledge` 表原生 SQL、自定义 Reader 子类等几处深度依赖，在 v2.8.7 下全部安全。
+
+### 注意事项（合并进 main / 通知下游前必须过一遍）
+
+1. **发布流程要跟上，不只是改版本号**——`AgentCom-las-feature` 那类下游项目是"打 wheel 包 + Docker 里强制覆盖安装"的模式，不走正常依赖解析。真要下游用上这次升级，需要重新打一个基于 `merge-agno-v2.8.7`（或合并进 main 后的最终态）的 wheel，替换他们 `Dockerfile.base`/`Dockerfile.slim` 里的文件名。
+2. **`libs/agno/UPGRADE_v2.8.6.md` 第七节的"下游依赖破坏性变更 + 澄清清单"仍然有效**——6 个问题里已经用 AgentCom 项目验证掉了大半，但"到底还有哪些内部项目依赖这个包、它们的 Python 版本是不是都 ≥3.9"这类跨项目的问题，还是需要人工去问一圈，不是这次合并能替你确认的。
+3. **`OpenAIChat` → `OpenAIResponses` 是个已发现但故意没动的问题**——`UPGRADE_v2.8.6.md` 第八节记录过，15 个文件里用的是 CLAUDE.md 建议弃用的 `OpenAIChat`，因为换成 `OpenAIResponses` 是模型类切换（工具调用 ID 格式都不一样），没有真实 API key 没法验证，留给了专门的后续任务。
+4. **entity memory（`agno/learn/`）内部重写了 5251 行**，虽然单测全绿、接口没大改，但涉及记忆抽取效果这种"跑起来才知道对不对"的东西，合并进 main 前建议找个有 API key 的环境把 `cookbook/08_learning/` 真跑一遍，别只信单测。
+5. 本次合并分支**只做到 push**，没有开 PR、没有合并进 `main`、没有通知任何下游团队——这几步需要你自己决定时机。
+
+### 快速定位
+
+- 完整必要性评估、破坏性审计、新功能怎么用：`UPGRADE_v2.8.6.md`
+- 这次 v2.8.7 小版本的具体改动：本文件下面几节
+
+---
+
 ## 一、上游改动内容
 
 | # | 改动 | PR | 性质 |
